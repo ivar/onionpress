@@ -3,7 +3,8 @@
 
 The images used to exist only as GHCR artifacts built by
 .github/workflows/docker-publish.yml, which runs on release and whose arm64
-half runs on a self-hosted Mac. build/build-images.sh is the local path.
+half, until September 2026, ran on a self-hosted Mac. build/build-images.sh
+is the local path.
 These checks guard the parts of it that fail quietly rather than loudly.
 """
 

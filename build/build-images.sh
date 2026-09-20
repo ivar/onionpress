@@ -6,9 +6,11 @@
 #   The tor and wordpress images only ever existed as GHCR artifacts produced
 #   by .github/workflows/docker-publish.yml. The Dockerfiles were in the repo
 #   but nothing invoked them, so "rebuild the tor container" meant reading the
-#   workflow YAML and reconstructing the buildx invocation by hand — and the
-#   arm64 half of that workflow runs on a self-hosted Mac an outside
-#   contributor cannot reach at all. This script is the local path.
+#   workflow YAML and reconstructing the buildx invocation by hand — and until
+#   September 2026 the arm64 half of that workflow ran on a self-hosted Mac an
+#   outside contributor could not reach at all. This script is the local path;
+#   the workflow now runs on GitHub-hosted runners and in forks, so the two
+#   are alternatives rather than one being the only way.
 #
 # WHAT IT PRODUCES
 #   onionpress-tor:dev            from app/Resources/docker/tor
@@ -67,7 +69,7 @@ GHCR_WP="ghcr.io/brewsterkahle/onionpress-wordpress"
 GHCR_STRESS="ghcr.io/brewsterkahle/onionpress-stress-worker"
 
 usage() {
-    sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 OPTIONS

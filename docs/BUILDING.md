@@ -13,9 +13,12 @@ steps, without the history.
 still fetch from upstream package sources — Debian, crates.io, Docker Hub,
 the Tor Project apt repo. Vendoring those is out of scope and would not be
 realistic for a WordPress + Tor stack. What *is* in scope is that nothing
-requires access to the project's CI, its registry credentials, or its
+requires access to the project's CI, its registry credentials, or anyone's
 self-hosted runner, and that the inputs are pinned so your build and the
-published build are comparable.
+published build are comparable. The CI holds to the same rule: the publish
+workflow runs entirely on GitHub-hosted runners and publishes to the
+namespace of whichever repository runs it, so a fork produces the full set
+of images without editing it — see [CI coverage](#ci-coverage).
 
 Some steps genuinely require a particular host OS — the `.dmg` needs macOS
 because it uses `swiftc`, `lipo`, `codesign`, `hdiutil` and `PlistBuddy`.
@@ -269,10 +272,14 @@ image store — a tag there resolves to exactly one manifest. The script refuses
 that combination up front rather than failing at the end of a long build.
 
 Cross-building the **tor** image is a QEMU-emulated Rust compile and takes
-hours. CI avoids it entirely: `docker-publish.yml` builds amd64 on a
-GitHub-hosted runner and arm64 on a self-hosted Apple Silicon Mac, then merges
-the two with `docker buildx imagetools create`. For local work, build natively
-for whatever you are on — that is what you run anyway.
+hours. CI avoids it entirely: `docker-publish.yml` builds amd64 on
+`ubuntu-latest` and arm64 on `ubuntu-24.04-arm` — both GitHub-hosted, both
+free for public repositories — then merges the two with
+`docker buildx imagetools create`. Until September 2026 the arm64 half ran on
+the maintainer's own Mac as a self-hosted runner, so every image release
+depended on that one machine being online and nobody else could produce the
+arm64 images at all. For local work, build natively for whatever you are on —
+that is what you run anyway.
 
 A consequence worth knowing: because the two halves are built at different
 times from unpinned upstreams, the amd64 and arm64 sides of a published
@@ -301,21 +308,34 @@ fix; deleting them is not.
 
 `.github/workflows/build-images.yml` runs `build/build-images.sh` on any PR
 touching a build context, so the local path cannot rot between releases. It is
-amd64-only, never pushes, never touches the self-hosted Mac (it runs fork PRs),
-and writes to a PR-scoped build cache so it cannot evict the release cache.
+amd64-only, never pushes, runs fork PRs only on a disposable GitHub-hosted
+runner with a read-only token, and writes to a PR-scoped build cache so it
+cannot evict the release cache.
 
-**`docker-publish.yml` was deliberately not rewired to call this script.** The
-two CI paths differ in ways a shared script would have to absorb carefully —
-the `type=gha` cache backend needs Actions runtime env vars that
-`build-push-action` injects and a plain `run:` step does not; the self-hosted
-runner reuses a long-lived builder while the hosted one gets a fresh empty one
-each run; and the two paths have different default provenance behaviour, a
-mismatch that already forced commit `419b53ec`. `build-images.sh` exposes every
-flag that migration needs (`--platform`, `--push`, `--registry`, `--cache-from`,
-`--cache-to`, `--provenance`, `--pull`) and the validation workflow exercises
-them, but changing the release publisher is a supply-chain change that
-[CONTRIBUTING.md](../CONTRIBUTING.md) reserves for the maintainer and that
-cannot be tested without cutting a release.
+`.github/workflows/docker-publish.yml` is the release publisher, and it needs
+nothing outside GitHub. Every job runs on a GitHub-hosted runner, and the
+image namespace comes from `github.repository_owner`, so a fork runs the same
+file and publishes `ghcr.io/<you>/onionpress-*` — "Run workflow" in the fork's
+Actions tab does it. The stress worker's base is passed as the `TOR_IMAGE`
+build-arg, so the worker extends the tor image the run itself just merged
+rather than the published one. `tests/test_publish_workflow.py` fails the
+build if a job moves off a hosted runner, an image reference bypasses the
+namespace or prefix variables, an account name is hardcoded, or the stress
+worker stops receiving its base. GHCR creates a package private on first
+push; make it public in the package settings if anything must pull it
+anonymously.
+
+**`docker-publish.yml` was deliberately not rewired to call `build-images.sh`.**
+The two CI paths differ in ways a shared script would have to absorb
+carefully — the `type=gha` cache backend needs Actions runtime env vars that
+`build-push-action` injects and a plain `run:` step does not, and the two
+paths have different default provenance behaviour, a mismatch that already
+forced commit `419b53ec`. `build-images.sh` exposes every flag that migration
+needs (`--platform`, `--push`, `--registry`, `--cache-from`, `--cache-to`,
+`--provenance`, `--pull`) and the validation workflow exercises them, but
+changing what the canonical images contain is a supply-chain change that
+[CONTRIBUTING.md](../CONTRIBUTING.md) reserves for the maintainer. A fork can
+now exercise such a change end to end before proposing it.
 
 ---
 

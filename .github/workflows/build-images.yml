@@ -3,17 +3,17 @@ name: Build container images (validation)
 # Proves build/build-images.sh still builds the images from the Dockerfiles in
 # this repo. This is the guarantee that the LOCAL build path keeps working —
 # docker-publish.yml only runs on a release, so until now a change that broke
-# the tor Dockerfile was not discovered until release day, and a contributor
-# without the self-hosted arm64 Mac had no way to find out at all.
+# the tor Dockerfile was not discovered until release day — and, while its
+# arm64 half still ran on the maintainer's self-hosted Mac, a contributor had
+# no way to find out at all.
 #
 # Deliberately build-only:
 #   * amd64 only. Cross-building arm64 here means a QEMU-emulated arti compile
 #     (hours). Architecture parity is docker-publish.yml's job, on two native
 #     runners.
-#   * Never pushes, and never touches the self-hosted macOS runner. This runs
-#     on pull_request, so a fork PR executes contributor code — that must stay
-#     on a disposable GitHub-hosted runner with a read-only token, never on the
-#     maintainer's Mac.
+#   * Never pushes. This runs on pull_request, so a fork PR executes
+#     contributor code — that must stay on a disposable GitHub-hosted runner
+#     with a read-only token.
 #   * Reads the release build cache but writes to its own PR-scoped one, so a
 #     PR cannot evict the cache docker-publish.yml depends on.
 #

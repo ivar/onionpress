@@ -64,6 +64,13 @@
 - Generated assets: `build/make-icons.sh` (icns is byte-exact; menubar PNGs need
   ImageMagick), `build/build-extension.sh` (builds Firefox from
   `extension-firefox/`, NOT the stale `extension/manifest.firefox.json`).
+- **`.github/workflows/docker-publish.yml` needs nothing outside GitHub**: amd64
+  on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm` (no self-hosted runner), and
+  `IMAGE_NAMESPACE` defaults to the repo owner so a fork's "Run workflow"
+  publishes `ghcr.io/<you>/…`. The stress worker gets its base via the
+  `TOR_IMAGE` build-arg. `tests/test_publish_workflow.py` enforces all of it.
+  On `development`, `IMAGE_PREFIX: dev-` names the images `dev-onionpress-*`;
+  reset it to `""` when merging into `main` (the test fails the PR otherwise).
 
 ## Container Image Pins
 - **`build/image-pins.env` is the single source of truth** for the GHCR image

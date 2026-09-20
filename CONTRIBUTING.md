@@ -127,11 +127,17 @@ CI runs the same tests on every PR; broken tests block merge.
 
 These aren't open to contributors, at least for now:
 
-- **Cutting releases.** Release tagging, DMG signing/notarization, and
-  upload to GitHub Releases require credentials only the maintainer has.
+- **Cutting releases.** Tagging and uploading to this repository's GitHub
+  Releases need write access to it. Nothing else does: the DMG is ad-hoc
+  signed (`codesign -s -`), not notarized, and every artifact — DMG, `.deb`,
+  extensions, container images — builds from a clone or a fork with no
+  maintainer credentials. See [docs/HOW-TO-BUILD.md](docs/HOW-TO-BUILD.md).
 - **`.github/workflows/docker-publish.yml`** — controls what
   `ghcr.io/brewsterkahle/onionpress-*` images contain. Supply chain;
-  changes go through extra review.
+  changes go through extra review. You can exercise a change end to end in
+  your fork first: the workflow runs on GitHub-hosted runners only and
+  publishes under the account that runs it, so a fork's "Run workflow"
+  produces `ghcr.io/<you>/onionpress-*` without touching the real images.
 - **The OnionHeaven hub registration protocol.** Changes affect every
   running install; coordinate with the maintainer before touching it.
 

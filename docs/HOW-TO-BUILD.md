@@ -2,8 +2,9 @@
 
 Everything OnionPress ships can be built on your own machine — the macOS
 installer, the Linux package, the container images, the browser extensions and
-the icons. Nothing needs the project's CI, its registry credentials or its
-self-hosted runner.
+the icons. Nothing needs the project's CI, its registry credentials or anyone's
+self-hosted runner — and the CI itself runs in a fork, on GitHub's own runners,
+publishing under your account (see [§6](#6-cutting-a-release-maintainers)).
 
 This is the practical guide: what to install, what to run, how to check the
 result. The *why* behind each step — pins, digests, the history of what went
@@ -357,8 +358,20 @@ release from Linux, because a `.dmg`-less "Latest" would 404 the README's
 download link.
 
 The container images are published by `.github/workflows/docker-publish.yml`
-on release. That workflow was deliberately **not** rewired to call
-`build/build-images.sh`; see
+on release, or by hand from the Actions tab ("Run workflow"). It runs entirely
+on GitHub-hosted runners — amd64 on `ubuntu-latest`, arm64 on
+`ubuntu-24.04-arm` — and publishes to the namespace of the repository it runs
+in, so it works unchanged in a fork:
+
+```bash
+gh workflow run docker-publish.yml --ref <branch> -R <you>/onionpress   # → ghcr.io/<you>/onionpress-*
+gh run watch -R <you>/onionpress
+```
+
+Runs from the `development` branch prefix every image with `dev-`. A package
+is private the first time GHCR sees it; make it public in the package settings
+if installs must pull it anonymously. The workflow was deliberately **not**
+rewired to call `build/build-images.sh`; see
 [BUILDING.md → CI coverage](BUILDING.md#ci-coverage) for what a migration must
 absorb. Never hand-edit an image digest — run `build/refresh-image-digests.sh`;
 `make test` fails on drift.
