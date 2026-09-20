@@ -440,6 +440,7 @@ Every command in this document was run, and its output checked, on:
 | Docker | client 27.5.1 / server 27.4.0 (Colima 0.8.1), Compose 2.40.2 — classic builder, no buildx |
 | tor image | 3 min 52 s cold, isolated Colima 6 CPU / 8 GB |
 | DMG | 3 min 43 s, dev-grade |
+| `docker-publish.yml` | 8 min 50 s end to end in a fork, GitHub-hosted runners only (`ubuntu-24.04`, `ubuntu-24.04-arm`), cold cache, all three images amd64 + arm64 |
 
 Not exercised: an Intel Mac host, Windows/WSL2, the buildx code path, a
 release-grade DMG (needs the python.org interpreter), Linux native `dpkg-deb`

@@ -71,6 +71,7 @@ about. So you know what you are trusting:
 | `AppIcon.icns`, `app-icon.png` | byte-identical to the committed files |
 | menubar PNGs | `running`, `starting` pixel-identical; `stopped` within 2/255 (see [Generated assets](#generated-assets)) |
 | extensions | byte-reproducible across runs |
+| `docker-publish.yml` | ran end to end in a fork (`ivar/onionpress`, run 35479901478, 2026-09-20) on GitHub-hosted runners only — amd64 on `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`. All three images published under the fork's own namespace as OCI indexes carrying both platforms; the stress worker's `FROM` resolved to the tor index the same run had merged 20 s earlier. 8 min 50 s cold; tor 6 min 56 s (amd64) / 4 min 45 s (arm64) |
 
 One forward-looking note from the DMG log: on macOS 27 `hdiutil create`,
 `hdiutil attach` and `hdiutil convert` each print a deprecation warning
