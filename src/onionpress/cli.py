@@ -58,9 +58,6 @@ class OnionPressCLI:
         extra_env["ONIONPRESS_SOCKS_PORT"] = str(self.port_config.socks_port)
         extra_env["ONIONPRESS_PROXY_PORT"] = str(self.port_config.proxy_port)
         extra_env["ONIONPRESS_PORT_OFFSET"] = str(self.port_config.offset)
-        extra_env["TOR_IMPL"] = read_value(
-            self.paths.config_file, "TOR_IMPL", "tor"
-        )
         extra_env["TZ"] = detect_timezone()
         extra_env["ONIONPRESS_VERSION"] = __version__
 

@@ -40,10 +40,10 @@ make doctor        # tells you which tools below you have and which you lack
 | Unit tests | `make test-unit` | any | ≈ 30 s |
 
 Times are from the [verified configuration](#8-verified-configuration) below
-— an Apple Silicon Mac. The tor image no longer compiles arti (it comes
-prebuilt from the Tor Project's image), so only the small mkp224o compile
-scales with cores; running the build under CPU emulation (e.g. building arm64
-on an Intel host) still multiplies every step.
+— an Apple Silicon Mac. The tor image compiles nothing but mkp224o (Tor
+comes from the Tor Project's image), so only that small compile scales with
+cores; running the build under CPU emulation (e.g. building arm64 on an
+Intel host) still multiplies every step.
 
 ---
 
@@ -60,11 +60,11 @@ on an Intel host) still multiplies every step.
 
 ### Hardware
 
-- **RAM for the tor image**: nothing heavy any more — arti comes prebuilt from
-  the Tor Project's image and only mkp224o is compiled. The verified build ran
-  in an 8 GB isolated Colima instance that had been sized for the old arti
-  compile; far less would do. Still build *beside*, not inside, OnionPress's
-  own 1 GB VM — it is your live site; see
+- **RAM for the tor image**: nothing heavy any more — Tor comes from the Tor
+  Project's image and only mkp224o is compiled. The verified build ran in an
+  8 GB isolated Colima instance that had been sized for the old arti compile;
+  far less would do. Still build *beside*, not inside, OnionPress's own 1 GB
+  VM — it is your live site; see
   [Building the tor image beside a running OnionPress](#building-the-tor-image-beside-a-running-onionpress).
 - **Disk**: about 2 GB for a DMG build (the assembled `OnionPress.app` is
   ≈ 370 MB, the DMG 160 MB, the download cache 290 MB); about 5 GB for the
@@ -77,7 +77,7 @@ Builds are local but not hermetic — they fetch pinned inputs from upstream:
 
 | Build | Reaches |
 |---|---|
-| `make images` | containers.torproject.org (the Tor Project's tor and arti images), Docker Hub (wordpress, docker CLI base images), Debian and deb.torproject.org apt repos, GitHub (mkp224o, wp-cli) |
+| `make images` | containers.torproject.org (the Tor Project's tor image), Docker Hub (wordpress, docker CLI base images), Debian and deb.torproject.org apt repos, GitHub (mkp224o, wp-cli) |
 | `make dmg` | GitHub releases (Colima, Lima, Docker Compose), download.docker.com, python.org/PyPI, libsodium.org |
 | `make deb`, `make extension`, `make icons` | nothing |
 
@@ -197,13 +197,13 @@ make images-multiarch REGISTRY=ghcr.io/you
 **Verify** what got baked in:
 
 ```bash
-docker run --rm --entrypoint sh onionpress-tor:dev -c 'tor --version; arti --version; docker --version; mkp224o -V'
+docker run --rm --entrypoint sh onionpress-tor:dev -c 'tor --version; docker --version; mkp224o -V'
 docker run --rm --entrypoint sh onionpress-wordpress:dev -c 'wp --info --allow-root | grep -i version; sha256sum /usr/local/bin/wp'
 ```
 
-Expected (as pinned in the Dockerfiles): Tor 0.4.9.13 and Arti 2.6.0, both
-from the pinned Tor Project images, Docker 29.8.1, mkp224o v1.7.0; wp-cli
-2.12.0 with the sha256 declared in `app/Resources/docker/wordpress/Dockerfile`.
+Expected (as pinned in the Dockerfiles): Tor 0.4.9.13 from the pinned Tor
+Project image, Docker 29.8.1, mkp224o v1.7.0; wp-cli 2.12.0 with the sha256
+declared in `app/Resources/docker/wordpress/Dockerfile`.
 
 #### Building the tor image beside a running OnionPress
 
@@ -441,7 +441,7 @@ Every command in this document was run, and its output checked, on:
 | Python | 3.14.7 (Homebrew) for scripts and tests; `uv` 0.12.15 for the dev-grade DMG |
 | ImageMagick | 7.1.2 |
 | Docker | client 27.5.1 / server 27.4.0 (Colima 0.8.1), Compose 2.40.2 — classic builder, no buildx |
-| tor image | 26 s after pulling the two Tor Project base images, isolated Colima 6 CPU / 8 GB |
+| tor image | under a minute after pulling the Tor Project base image, isolated Colima 6 CPU / 8 GB |
 | DMG | 3 min 43 s, dev-grade |
 | `docker-publish.yml` | 8 min 50 s end to end in a fork, GitHub-hosted runners only (`ubuntu-24.04`, `ubuntu-24.04-arm`), cold cache, all three images amd64 + arm64 |
 

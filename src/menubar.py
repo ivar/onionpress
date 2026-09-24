@@ -424,7 +424,7 @@ class OnionPressApp(rumps.App):
         self._yellow_since = None          # Timestamp when entered yellow state
         self._last_check_complete_ts = time.time()  # Last time check_status finished a full pass
         self._was_ready = False            # Were we ever ready this session?
-        self._tor_internally_ready = False # Checks 1-4 passed (Arti+WordPress up)
+        self._tor_internally_ready = False # Checks 1-4 passed (Tor+WordPress up)
         # Reclaim fields kept for compatibility (notify_onionheaven_online still sets them)
         self._onionheaven_reclaim_succeeded = False
         self._onionheaven_reclaim_in_flight = False
@@ -1848,7 +1848,7 @@ class OnionPressApp(rumps.App):
 
                         # Auto-restart tor if stuck for 2+ minutes AND
                         # the container shows signs of actual trouble (broken
-                        # guards, circuit failures). If Arti is healthy but
+                        # guards, circuit failures). If Tor is healthy but
                         # just waiting for descriptor propagation, don't restart
                         # — that would reset progress.
                         # Uses cooldown (5 min) so we can retry if the spiral recurs.
@@ -4862,7 +4862,7 @@ License: AGPL v3"""
                 'version': self.version,
                 'onion_address': onion_addr,
                 'onionname': self._read_config_value("ONIONNAME", ""),
-                'tor_impl': self._read_config_value("TOR_IMPL", "tor"),
+                'tor_impl': 'tor',  # the only implementation since 2026-09-24; kept for the OnionHome schema
                 'uptime_seconds': uptime_seconds,
                 'bootstrap_pct': bootstrap_pct,
                 'containers': containers,

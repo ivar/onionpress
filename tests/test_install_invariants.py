@@ -135,43 +135,40 @@ class TestMacOSBuildBundlesMkp224o(unittest.TestCase):
         )
 
 
-class TestTorImplDefaultsToCTor(unittest.TestCase):
-    """C Tor (TOR_IMPL=tor) has been the default since 2026-03-16. But the
-    CLI-rewrite foundation (commit c15d8dd9, 2026-03-20) introduced
-    read_value(..., "TOR_IMPL", "arti") in containers.py and cli.py — so on
-    a fresh install with no TOR_IMPL in config (the normal case, since the
-    value only gets written when it's non-default), those paths brought the
-    stack up as Arti and the menubar settings window showed "arti". Every
-    TOR_IMPL default must be "tor" to match config.py DEFAULTS, the bash
-    launcher, settings_ui, and menubar.py.
+class TestNoTorImplementationSwitch(unittest.TestCase):
+    """TOR_IMPL chose between C Tor and Arti until 2026-09-24. Arti was then
+    removed: it hosts a site acceptably, but it has no control interface and
+    sleep/wake, the watchdog's stall recovery and the OnionHeaven takeover
+    pipeline are all built on the control port. The switch must not creep
+    back into the app, the launchers or the compose file — a value nobody
+    honours is worse than none.
     """
 
-    def test_no_tor_impl_default_is_arti_or_unknown(self):
+    FILES = [
+        "app/MacOS/onionpress", "linux/onionpress",
+        "app/Resources/docker/docker-compose.yml",
+        "app/Resources/docker/tor/entrypoint.sh",
+        "app/Resources/config-template.txt",
+    ]
+
+    def test_tor_impl_is_gone(self):
         import glob
+        paths = glob.glob(os.path.join(PROJECT_ROOT, "src", "**", "*.py"), recursive=True)
+        paths += [os.path.join(PROJECT_ROOT, f) for f in self.FILES]
         offenders = []
-        pat = re.compile(r'TOR_IMPL"\s*,\s*"(arti|unknown)"')
-        py_files = glob.glob(os.path.join(PROJECT_ROOT, "src", "**", "*.py"),
-                             recursive=True)
-        for path in py_files:
+        for path in paths:
             with open(path, "r", encoding="utf-8") as f:
                 for lineno, line in enumerate(f, 1):
-                    if pat.search(line):
-                        rel = os.path.relpath(path, PROJECT_ROOT)
-                        offenders.append(f"{rel}:{lineno}: {line.strip()}")
+                    if "TOR_IMPL" in line:
+                        offenders.append(f"{os.path.relpath(path, PROJECT_ROOT)}:{lineno}: {line.strip()}")
         self.assertEqual(
             offenders, [],
-            "TOR_IMPL must default to \"tor\" (C Tor) everywhere. Found "
-            "non-tor defaults:\n" + "\n".join(offenders),
+            "TOR_IMPL was removed with Arti on 2026-09-24. Found:\n" + "\n".join(offenders),
         )
 
-    def test_config_defaults_tor_impl_is_tor(self):
+    def test_config_defaults_have_no_tor_impl(self):
         cfg = _read("src/onionpress/config.py")
-        self.assertRegex(
-            cfg,
-            r'"TOR_IMPL":\s*"tor"',
-            "config.py DEFAULTS must keep TOR_IMPL = \"tor\".",
-        )
-
+        self.assertNotIn('"TOR_IMPL"', cfg, "config.py must not define TOR_IMPL.")
 
 class TestMakefilePrecheckUsesCorrectPath(unittest.TestCase):
     """The Makefile's `make test` target asserts required source files

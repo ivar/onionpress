@@ -17,7 +17,7 @@
 # USAGE
 #   build/base-image-digest.sh containers.torproject.org/tpo/onion-services/onimages/tor:trixie
 #   build/base-image-digest.sh docker:29.8.1-cli
-#   build/base-image-digest.sh debian:trixie-slim
+#   build/base-image-digest.sh wordpress:latest
 #
 #   Prints the pinned reference (tag@sha256:…) on stdout and the platforms it
 #   carries on stderr. Exits 1 if the tag resolves to a single-platform

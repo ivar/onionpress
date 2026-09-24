@@ -35,9 +35,10 @@ permissions:
   contents: read
 
 jobs:
-  # Which contexts actually changed. The tor image pulls two Tor Project base
-  # images and compiles mkp224o, so it is only rebuilt when something under its
-  # context moved — a docs-only or wordpress-only PR should not pay for it.
+  # Which contexts actually changed. The tor image pulls the Tor Project's
+  # base image and compiles mkp224o, so it is only rebuilt when something
+  # under its context moved — a docs-only or wordpress-only PR should not pay
+  # for it.
   changes:
     name: Detect changed contexts
     runs-on: ubuntu-latest

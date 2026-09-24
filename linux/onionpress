@@ -240,12 +240,9 @@ export ONIONPRESS_BIND_HOST
 
 # Every OnionPress node is an OnionHeaven server (accepts registrations).
 # The API server runs inside the tor container (always on, ~15MB overhead).
-# The heartbeat monitor + takeover Arti container starts lazily on first
+# The heartbeat monitor + takeover Tor container starts lazily on first
 # registration. Takeover workers spawn on demand when a registered site
 # goes offline. ONIONHEAVEN_HUB=1 enables 10 intro points (auto-detected).
-# Tor implementation (C Tor is the default, matching Mac)
-export TOR_IMPL="${TOR_IMPL:-tor}"
-
 # OnionHome analytics directory (bind-mounted into tor container)
 export ONIONPRESS_SHARED_DIR="$DATA_DIR/shared"
 mkdir -p "$ONIONPRESS_SHARED_DIR/analytics"
@@ -300,7 +297,6 @@ export CLOUDFLARE_TUNNEL_TOKEN
 if [ ! -f "$DATA_DIR/config" ]; then
     cat > "$DATA_DIR/config" <<EOF
 ADDRESS_PREFIX=op2
-TOR_IMPL=tor
 INSTALL_IA_PLUGIN=yes
 UPDATE_ON_LAUNCH=no
 START_ON_BOOT=yes
@@ -311,8 +307,6 @@ fi
 
 # Read settings from config (override defaults)
 if [ -f "$DATA_DIR/config" ]; then
-    _val=$(grep "^TOR_IMPL=" "$DATA_DIR/config" 2>/dev/null | cut -d= -f2)
-    [ -n "$_val" ] && export TOR_IMPL="$_val"
     _val=$(grep "^ONIONHEAVEN_MAX_SERVICES=" "$DATA_DIR/config" 2>/dev/null | cut -d= -f2)
     [ -n "$_val" ] && export ONIONHEAVEN_MAX_SERVICES="$_val"
     _val=$(grep "^ONIONHEAVEN_PROPAGATION_DELAY=" "$DATA_DIR/config" 2>/dev/null | cut -d= -f2)
@@ -467,7 +461,7 @@ WHAT THIS COMMAND DOES:
   1. Decodes the base32 key and validates it is exactly 64 bytes
   2. Derives the .onion address from the public key portion
   3. Writes key files to ~/.onionpress/shared/vanity-keys/<address>/
-     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM format for Arti)
+     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM, the format the container takes)
      - hostname                           (the .onion address)
   4. On next start, OnionPress will use this key
 
@@ -537,7 +531,7 @@ HELPEOF
 
     touch "$DATA_DIR/.import-key-pending"
 
-    # Write all key files (Arti PEM + C Tor + hostname)
+    # Write all key files (PEM + C Tor + hostname)
     if ! python3 "$SCRIPTS_DIR/key_manager.py" import-key "$key_b32" "$DATA_DIR/shared/vanity-keys" 2>>"$LOG_FILE"; then
         echo "ERROR: Failed to write key files" >&2
         return 1
@@ -1069,10 +1063,10 @@ start_containers() {
     # Handle pending key import
     if [ -f "$DATA_DIR/.import-key-pending" ]; then
         log "Pending key import detected -- removing old arti-state and tor-state volumes..."
-        # Both keystores must be wiped: arti-state holds the Arti key, tor-state
-        # holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The entrypoint
-        # only converts Arti->C Tor when CTOR_SECRET is missing, so a stale
-        # tor-state would silently override the imported identity.
+        # Both keystores must be wiped: arti-state holds the delivered PEM key,
+        # tor-state holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The
+        # entrypoint only converts PEM->C Tor when CTOR_SECRET is missing, so a
+        # stale tor-state would silently override the imported identity.
         for vol in onionpress-arti-state onionpress-tor-state; do
             docker volume rm "$vol" >> "$LOG_FILE" 2>&1 || true
             if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "$vol"; then
@@ -1146,7 +1140,8 @@ start_containers() {
             && log "Key formats synchronized" \
             || log "WARNING: Failed to synchronize key formats"
 
-        # Sync imported key to Arti state volume
+        # Sync imported key to the arti-state volume (historical name: the
+        # identity keystore the entrypoint reads the PEM from)
         docker volume create onionpress-arti-state >> "$LOG_FILE" 2>&1 || true
         if ! docker run --rm \
             -v onionpress-arti-state:/dest \
@@ -1158,7 +1153,7 @@ start_containers() {
 
         # C Tor keys were already ensured by ensure-formats above
 
-        # Sync imported key to C Tor state volume (for TOR_IMPL=tor)
+        # Sync imported key to C Tor state volume as well
         if [ -f "$VANITY_DIR/hs_ed25519_secret_key" ]; then
             docker volume create onionpress-tor-state >> "$LOG_FILE" 2>&1 || true
             if docker run --rm \
@@ -1288,7 +1283,7 @@ start_containers() {
     docker compose up -d tor onionheaven >> "$LOG_FILE" 2>&1 || log "ERROR: Failed to start tor/onionheaven containers"
 
     # OnionHeaven: the API server runs inside the tor container (always on).
-    # The heartbeat monitor + takeover Arti container starts lazily when the
+    # The heartbeat monitor + takeover Tor container starts lazily when the
     # first registration arrives (signaled by an activation flag file).
     start_onionheaven_activation_watcher
 
@@ -1539,11 +1534,11 @@ create_backup() {
     staging=$(mktemp -d -t onionpress-backup-XXXXXX)
     trap "rm -rf '$staging'" RETURN
 
-    # 1. Extract Tor keys (both Arti and C Tor formats)
+    # 1. Extract Tor keys (both PEM and C Tor formats)
     log "Backup: extracting Tor keys..."
     mkdir -p "$staging/tor-keys"
 
-    # Arti format key (ks_hs_id.ed25519_expanded_private)
+    # PEM key (ks_hs_id.ed25519_expanded_private)
     local arti_key
     arti_key=$(find "$DATA_DIR/shared/vanity-keys" -name "ks_hs_id.ed25519_expanded_private" 2>/dev/null | head -1)
     if [ -n "$arti_key" ]; then
@@ -1553,7 +1548,7 @@ create_backup() {
         docker run --rm -v onionpress-arti-state:/src alpine cat /src/state/keystore/hss/wordpress/ks_hs_id.ed25519_expanded_private > "$staging/tor-keys/ks_hs_id.ed25519_expanded_private" 2>/dev/null || true
         if [ ! -s "$staging/tor-keys/ks_hs_id.ed25519_expanded_private" ]; then
             rm -f "$staging/tor-keys/ks_hs_id.ed25519_expanded_private"
-            log "WARNING: No Arti key found"
+            log "WARNING: No PEM key found"
         fi
     fi
 
@@ -1710,7 +1705,7 @@ restore_backup() {
     log "Restore: backup from $onion_address"
 
     # 1. Restore Tor keys — copy whatever formats the backup has to vanity-keys.
-    #    start_containers() will derive C Tor keys from Arti PEM if needed.
+    #    start_containers() will derive C Tor keys from the PEM if needed.
     local arti_key="$staging/tor-keys/ks_hs_id.ed25519_expanded_private"
     local ctor_secret="$staging/tor-keys/hs_ed25519_secret_key"
     local ctor_public="$staging/tor-keys/hs_ed25519_public_key"
@@ -1848,7 +1843,7 @@ print(json.dumps(containers))
     onion_addr=$(echo "$onion_addr" | tr -d '\n\r ')
 
     # Get bootstrap percentage (use docker logs directly — compose logs needs env vars
-    # and tail 50 may miss the bootstrap message in verbose Arti debug logs)
+    # and tail 50 may miss the bootstrap message in verbose logs)
     local bootstrap_pct=0
     if docker logs onionpress-tor 2>&1 | grep -q -E "Bootstrapped 100%|Sufficiently bootstrapped"; then
         bootstrap_pct=100
@@ -2223,7 +2218,7 @@ _validate_oh_address() {
 
     # Self check — compare against our own address
     local our_address=""
-    our_address=$(docker exec onionpress-tor cat /var/lib/arti/keystore/Arti/ks_hss/wordpress/address.txt 2>/dev/null | tr -d '\n\r ')
+    our_address=$(docker exec onionpress-tor cat /var/lib/tor/hidden_service/wordpress/hostname 2>/dev/null | tr -d '\n\r ')
     if [ -n "$our_address" ] && [ "$addr" = "$our_address" ]; then
         echo '{"valid":false,"status":"self","message":"You cannot use your own onion address as the OnionHeaven hub."}'
         return 1

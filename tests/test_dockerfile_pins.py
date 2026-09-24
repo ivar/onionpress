@@ -10,17 +10,15 @@ mkp224o — and because CI builds amd64 and arm64 on separate runners at
 different times, the two halves of one published manifest could disagree.
 
 Since Onimages 0.3.0 (2026-09-24) the tor image is built ON the Tor Project's
-own onion-service images from containers.torproject.org: their C Tor image is
-the runtime base and their arti image supplies the arti binary. The apt-key
-verification this file used to check therefore happens in the Tor Project's
-build, not ours; what this image asserts instead is that both images are
-pinned by digest and that the arti they deliver is the version and feature set
-the app needs.
+own C Tor image from containers.torproject.org. The apt-key verification this
+file used to check therefore happens in the Tor Project's build, not ours;
+what this file asserts instead is that the base is that image, pinned by
+digest. Arti was removed the same day (no control interface for onion
+services); the image must not grow it back by accident.
 
 These are static checks on the Dockerfiles. They cannot prove an image builds;
 they prove the inputs are named immutably and that the build-time assertions
-(arti version and onion-service feature, mkp224o commit, wp-cli checksum) are
-still wired.
+(mkp224o commit, wp-cli checksum) are still wired.
 """
 
 import os
@@ -34,10 +32,9 @@ WP_DOCKERFILE = "app/Resources/docker/wordpress/Dockerfile"
 STRESS_DOCKERFILE = "tests/stress/Dockerfile"
 
 # The Tor Project's onion-service images (the Onimages project), the only
-# place Tor and arti may come from.
+# place Tor may come from.
 ONIMAGES = "containers.torproject.org/tpo/onion-services/onimages"
 ONIMAGES_TOR = ONIMAGES + "/tor"
-ONIMAGES_ARTI = ONIMAGES + "/arti"
 
 
 def _read(rel_path):
@@ -198,89 +195,6 @@ class TestBaseImagesArePinned(unittest.TestCase):
         self.assertRegex(text, r"FROM \$\{TOR_IMAGE\}")
 
 
-class TestArtiComesFromTheOfficialImage(unittest.TestCase):
-    """arti is copied out of the Tor Project's arti image, pinned by digest,
-    instead of compiled from crates.io. Upstream runs `cargo install arti`
-    with no --version — newest crate on their build day — so the digest is
-    what pins the binary, and the Dockerfile has to say which arti that is
-    and check it, or a digest bump could change the running Tor
-    implementation without anyone reading a version number.
-    """
-
-    def test_arti_is_a_named_pinned_stage(self):
-        text = _read(TOR_DOCKERFILE)
-        refs = dict((alias, ref) for ref, alias in _from_refs(text) if alias)
-        self.assertIn("arti", refs, "Expected a `FROM … AS arti` stage.")
-        self.assertRegex(
-            refs["arti"], r"^" + re.escape(ONIMAGES_ARTI) + r":\S+@sha256:",
-            f"The arti stage must be {ONIMAGES_ARTI}:<tag>@<digest>, got "
-            f"{refs['arti']!r}.",
-        )
-        self.assertRegex(
-            _strip_comments(text),
-            re.compile(r"^COPY --from=arti /usr/local/bin/arti /usr/local/bin/arti\s*$", re.M),
-            "The runtime stage must copy /usr/local/bin/arti out of the arti "
-            "stage.",
-        )
-        self.assertNotIn(
-            "cargo install", _strip_comments(text),
-            "arti must not be compiled here any more; it comes from the "
-            "official image.",
-        )
-
-    def test_arti_version_is_declared_and_asserted(self):
-        text = _read(TOR_DOCKERFILE)
-        self.assertRegex(
-            text, re.compile(r"^ARG ARTI_VERSION=\d+\.\d+\.\d+$", re.M),
-            "The tor Dockerfile must declare ARG ARTI_VERSION=X.Y.Z — the "
-            "one place the arti version is written down.",
-        )
-        code = _strip_comments(text)
-        self.assertIn(
-            "arti --version", code,
-            "The build must run `arti --version` on the copied binary...",
-        )
-        self.assertRegex(
-            code, r'!= "Arti \$\{ARTI_VERSION\}"',
-            "...and compare it against ARTI_VERSION, failing the build on "
-            "mismatch.",
-        )
-
-    def test_onion_service_feature_is_proven_at_build(self):
-        """`arti hss` exists only when arti was built with the
-        onion-service-service feature — what lets this image host a site
-        rather than only reach one. Upstream enables it today; if that
-        changes, the build must fail, not the site at first start.
-        """
-        code = _strip_comments(_read(TOR_DOCKERFILE))
-        self.assertRegex(
-            code, r"arti hss --help",
-            "The build must run `arti hss --help` to prove the copied arti "
-            "has onion-service support.",
-        )
-
-    def test_same_debian_release_on_both_sides(self):
-        """Upstream links arti dynamically against libssl3 and libsqlite3 (no
-        static-sqlite). The binary only runs if the runtime stage is the SAME
-        Debian release as the arti image, and installs sqlite3.
-        """
-        text = _read(TOR_DOCKERFILE)
-        refs = _from_refs(text)
-        stages = dict((alias, ref) for ref, alias in refs if alias)
-        runtime = refs[-1][0]
-        tag_of = lambda ref: ref.split("@", 1)[0].rsplit(":", 1)[1]
-        self.assertEqual(
-            tag_of(stages["arti"]), tag_of(runtime),
-            "The arti image and the tor runtime base must be the same Debian "
-            "release tag, or arti's shared libraries will not match.",
-        )
-        self.assertRegex(
-            _strip_comments(text).replace("\\\n", " "),
-            r"apt-get install[^\n]*\bsqlite3\b",
-            "The runtime stage must install sqlite3 (libsqlite3-0) for arti.",
-        )
-
-
 class TestMkp224oIsPinned(unittest.TestCase):
     """MKP224O_COMMIT defaulted to `master` with a standing TODO in the file.
     mkp224o mints users' vanity onion addresses — an unpinned build of it is
@@ -390,6 +304,27 @@ class TestTorComesFromTheOfficialImage(unittest.TestCase):
                 f"{needle!r}: the apt-key handling moved upstream into the "
                 "Tor Project's image build and must not come back here.",
             )
+
+    def test_no_arti(self):
+        """Arti was removed on 2026-09-24: it hosts a site acceptably but has
+        no control interface, and sleep/wake, the watchdog's recovery and the
+        OnionHeaven takeover pipeline are all built on the control port. Its
+        key file format stays (OnionHeaven's wire format, delivered through
+        the arti-state volume); the daemon must not come back unnoticed.
+        """
+        code = _strip_comments(_read(TOR_DOCKERFILE))
+        self.assertNotIn(
+            ONIMAGES + "/arti", code,
+            "The tor Dockerfile must not pull the Tor Project's arti image.",
+        )
+        self.assertNotRegex(
+            code, r"(?m)^COPY [^\n]*\barti\b",
+            "No arti binary or config may be copied into the image.",
+        )
+        self.assertNotRegex(
+            code, r"useradd[^\n]*\barti\b",
+            "No arti user: nothing in the image runs as it.",
+        )
 
     def test_tor_is_not_reinstalled(self):
         code = _strip_comments(_read(TOR_DOCKERFILE)).replace("\\\n", " ")

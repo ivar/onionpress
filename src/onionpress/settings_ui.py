@@ -90,16 +90,6 @@ SETTINGS_HELP = {
         "Wayback Machine copy.\n\n"
         "Default: oheavenfhbohpdjijmxo3xgvvuo6eleyhhorbompoycle6x5eajlp7qd.onion"
     ),
-    "TOR_IMPL": (
-        "Tor Implementation\n\n"
-        "Choose which Tor implementation runs your onion services.\n\n"
-        "C Tor: The classic C implementation (default). Faster onion service releases "
-        "(sends DESTROY cells to intro relays). Available via apt-get.\n\n"
-        "Arti: Tor Project's modern Rust implementation. "
-        "Native arm64 on Apple Silicon.\n\n"
-        "Keys are automatically converted between formats when switching.\n"
-        "Requires restart to take effect."
-    ),
     "CLOUDFLARE_TUNNEL_TOKEN": (
         "Cloudflare Tunnel (Clearnet Access)\n\n"
         "Expose your WordPress site on the regular internet via Cloudflare Tunnel.\n\n"
@@ -156,10 +146,6 @@ SETTINGS_CONSEQUENCES = {
         "yes": "Diagnostic logs will be shared with OnionHome.",
         "no": "Log sharing disabled.",
     },
-    "TOR_IMPL": {
-        "arti": "Tor will run using Arti (Rust). Requires restart.",
-        "tor": "Tor will run using C Tor. Faster releases. Requires restart.",
-    },
     "CLOUDFLARE_TUNNEL_TOKEN": {
         "set": (
             "Your site will be exposed on the clearnet via Cloudflare. "
@@ -172,7 +158,7 @@ SETTINGS_CONSEQUENCES = {
 # Settings that require a restart to take effect.
 # All others are applied immediately (read from config on next cycle).
 _NEEDS_RESTART = {
-    "ADDRESS_PREFIX", "VM_MEMORY", "VM_CPU", "TOR_IMPL",
+    "ADDRESS_PREFIX", "VM_MEMORY", "VM_CPU",
     "CLOUDFLARE_TUNNEL_TOKEN",
 }
 
@@ -187,7 +173,6 @@ _LABELS = {
     "INSTALL_IA_PLUGIN": "Install IA Plugin",
     "REGISTER_WITH_ONIONHEAVEN": "Register with OnionHeaven",
     "ONIONHEAVEN_ADDRESS": "OnionHeaven Hub",
-    "TOR_IMPL": "Tor Implementation",
     "CLOUDFLARE_TUNNEL_TOKEN": "Cloudflare Token",
     "SHARE_ANALYTICS_WITH_ONIONHOME": "Share Analytics with OnionHome",
 }
@@ -204,7 +189,6 @@ SETTINGS_KEYS = [
     ("REGISTER_WITH_ONIONHEAVEN", "yes"),
     ("SHARE_ANALYTICS_WITH_ONIONHOME", "no"),
     ("ONIONHEAVEN_ADDRESS", "oheavenfhbohpdjijmxo3xgvvuo6eleyhhorbompoycle6x5eajlp7qd.onion"),
-    ("TOR_IMPL", "tor"),
     ("CLOUDFLARE_TUNNEL_TOKEN", ""),
 ]
 
@@ -378,14 +362,6 @@ def show_settings_dialog(config_path, icon_path, launcher_script, log_func, call
         oh_addr_field.setPlaceholderString_("oheavenfhb...onion")
         oh_addr_field.setFrame_(AppKit.NSMakeRect(input_x, oh_addr_field.frame().origin.y, input_w, 24))
         y -= row_h
-        tor_impl_val = form_values.get("TOR_IMPL", "tor").lower()
-        if tor_impl_val not in ("arti", "tor"):
-            tor_impl_val = "tor"
-        add_popup_row(y, "Tor Implementation (advanced):", "TOR_IMPL", tor_impl_val, [
-            ("C Tor (default)", "tor"),
-            ("Arti", "arti"),
-        ])
-        y -= row_h
         cf_field = add_text_row(y, "Cloudflare Token (optional):", "CLOUDFLARE_TUNNEL_TOKEN", form_values["CLOUDFLARE_TUNNEL_TOKEN"])
         cf_field.setPlaceholderString_("paste tunnel token")
         cf_field.setFrame_(AppKit.NSMakeRect(input_x, cf_field.frame().origin.y, input_w, 24))
@@ -406,15 +382,11 @@ def show_settings_dialog(config_path, icon_path, launcher_script, log_func, call
         # -- Collect new values from form --
         new_values = {}
         sleep_options_map = ["normal", "on-battery", "never"]
-        tor_impl_options_map = ["tor", "arti"]
         for key in [k for k, _ in SETTINGS_KEYS]:
             widget = fields[key]
             if key == "PREVENT_SLEEP":
                 idx = widget.indexOfSelectedItem()
                 new_values[key] = sleep_options_map[idx] if 0 <= idx < len(sleep_options_map) else "normal"
-            elif key == "TOR_IMPL":
-                idx = widget.indexOfSelectedItem()
-                new_values[key] = tor_impl_options_map[idx] if 0 <= idx < len(tor_impl_options_map) else "tor"
             elif key in ("LAUNCH_ON_LOGIN", "UPDATE_ON_LAUNCH",
                          "INSTALL_IA_PLUGIN", "REGISTER_WITH_ONIONHEAVEN",
                          "SHARE_ANALYTICS_WITH_ONIONHOME"):

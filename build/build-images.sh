@@ -38,10 +38,10 @@
 #
 # HOW LONG
 #   wordpress and stress-worker are seconds. The tor image pulls the Tor
-#   Project's tor and arti images (about 400 MB together, once) and compiles
-#   only mkp224o — under a minute natively. It used to compile arti from
-#   crates.io and take tens of minutes; under QEMU emulation, hours — which is
-#   why CI still builds each architecture on its own native runner instead of
+#   Project's tor image (about 260 MB, once) and compiles only mkp224o —
+#   under a minute natively. It used to compile arti from crates.io and take
+#   tens of minutes; under QEMU emulation, hours — which is why CI still
+#   builds each architecture on its own native runner instead of
 #   cross-building.
 
 set -euo pipefail

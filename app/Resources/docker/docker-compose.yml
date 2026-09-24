@@ -13,9 +13,11 @@ services:
         hard: 10000
     environment:
       - TZ=${TZ:-UTC}
-      - TOR_IMPL=${TOR_IMPL:-tor}
       - ONIONPRESS_VERSION=${ONIONPRESS_VERSION:-unknown}
     volumes:
+      # arti-state is the identity keystore: the launchers deliver the onion
+      # service key here as a PEM and the entrypoint converts it for C Tor.
+      # The name is historical; renaming it would orphan every install's key.
       - arti-state:/var/lib/arti/
       - tor-state:/var/lib/tor/
       - onionpress-data:/var/lib/onionpress
@@ -142,14 +144,12 @@ services:
         hard: 10000
     environment:
       - TZ=${TZ:-UTC}
-      - TOR_IMPL=${TOR_IMPL:-tor}
       - NO_ONION_SERVICE=1
       - ONIONHEAVEN=1
       - ONIONPRESS_VERSION=${ONIONPRESS_VERSION:-unknown}
       - TOR_PROPAGATION_DELAY=${ONIONHEAVEN_PROPAGATION_DELAY:-180}
       - ONIONHEAVEN_TAKEOVER_SCALE_THRESHOLD=${ONIONHEAVEN_MAX_SERVICES:-50}
     volumes:
-      - arti-state-polling:/var/lib/arti/
       - onionpress-data:/var/lib/onionpress
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     restart: unless-stopped
@@ -161,8 +161,6 @@ volumes:
     name: onionpress-arti-state
   tor-state:
     name: onionpress-tor-state
-  arti-state-polling:
-    name: onionpress-arti-state-polling
   wordpress-data:
     name: onionpress-wordpress-data
   db-data:

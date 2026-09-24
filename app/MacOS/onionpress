@@ -235,17 +235,6 @@ if [ -f "$DATA_DIR/config" ]; then
 fi
 export CLOUDFLARE_TUNNEL_TOKEN
 
-# Tor implementation: "tor" (C Tor, default) or "arti"
-# Read from config file, default to C Tor
-TOR_IMPL="tor"
-if [ -f "$DATA_DIR/config" ]; then
-    _tor_impl=$(grep "^TOR_IMPL=" "$DATA_DIR/config" | cut -d= -f2)
-    if [ "$_tor_impl" = "tor" ] || [ "$_tor_impl" = "arti" ]; then
-        TOR_IMPL="$_tor_impl"
-    fi
-fi
-export TOR_IMPL
-
 # Locally built container images (development).
 #
 # build/build-images.sh builds the tor and wordpress images from this repo and
@@ -307,7 +296,7 @@ else
 fi
 
 # OnionHeaven farm — takeover worker containers
-# Each gets its own Arti instance (own guard pool) to prevent circuit exhaustion.
+# Each gets its own Tor instance (own guard pool) to prevent circuit exhaustion.
 # Starts with 2, scales up by 2 when threshold is hit.
 # The farm monitor and workers are managed by the onionheaven container itself
 # via farm_scale_requests in the registry DB.
@@ -317,7 +306,6 @@ ONIONHEAVEN_FARM_MONITOR_PID=""
 _start_takeover_worker() {
     local idx="$1"
     local name="onionheaven-takeover-${idx}"
-    local vol="onionpress-arti-state-takeover-${idx}"
 
     docker rm -f "$name" >> "$LOG_FILE" 2>&1 || true
 
@@ -328,11 +316,9 @@ _start_takeover_worker() {
         --log-opt max-size=10m \
         --log-opt max-file=3 \
         -e TZ="${TZ:-UTC}" \
-        -e TOR_IMPL="${TOR_IMPL:-tor}" \
         -e TAKEOVER_WORKER=1 \
         -e CONTAINER_NAME="$name" \
         -e MAX_TAKEOVER_SERVICES="${ONIONHEAVEN_MAX_SERVICES:-10}" \
-        -v "${vol}:/var/lib/arti/" \
         -v "onionpress-persistent-data:/var/lib/onionpress" \
         --restart unless-stopped \
         "${ONIONHEAVEN_IMAGE:-${ONIONPRESS_TOR_IMAGE:-ghcr.io/brewsterkahle/onionpress-tor:latest@sha256:1f98ac29337bf9d5da41a80d865d04e21934eb8deba2a86009b8a69c0a4f6e7c}}" >> "$LOG_FILE" 2>&1; then
@@ -609,8 +595,9 @@ detect_container_runtime() {
     return 1
 }
 
-# Ensure both C Tor and Arti key formats exist in a directory.
-# Derives whichever is missing from whichever is present.
+# Ensure both key formats exist in a directory: C Tor's key files and the
+# OpenSSH PEM (ks_hs_id.ed25519_expanded_private) that the container and
+# OnionHeaven take. Derives whichever is missing from whichever is present.
 ensure_key_formats() {
     local dir="$1"
     bundled_python "$SCRIPTS_DIR/key_manager.py" ensure-formats "$dir" >> "$LOG_FILE" 2>&1
@@ -681,7 +668,7 @@ generate_vanity_address() {
     VANITY_ADDRESS=$(basename "$VANITY_DIR")
     log "Generated custom address: $VANITY_ADDRESS" >&2
 
-    # Ensure both key formats exist (mkp224o generates C Tor format, derive Arti PEM)
+    # Ensure both key formats exist (mkp224o generates C Tor format, derive the PEM)
     if ! ensure_key_formats "$VANITY_DIR"; then
         log "ERROR: ensure_key_formats failed for $VANITY_DIR" >&2
         return 1
@@ -733,7 +720,7 @@ WHAT THIS COMMAND DOES:
   1. Decodes the base32 key and validates it is exactly 64 bytes
   2. Derives the .onion address from the public key portion
   3. Writes key files to ~/.onionpress/shared/vanity-keys/<address>/
-     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM format for Arti)
+     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM, the format the container takes)
      - hostname                           (the .onion address)
   4. On next start, OnionPress will use this key
 
@@ -810,7 +797,7 @@ HELPEOF
     # (needed when Docker isn't running and we can't remove the volume now)
     touch "$DATA_DIR/.import-key-pending"
 
-    # Write all key files (Arti PEM + C Tor + hostname)
+    # Write all key files (PEM + C Tor + hostname)
     if ! bundled_python "$SCRIPTS_DIR/key_manager.py" import-key "$key_b32" "$DATA_DIR/shared/vanity-keys" 2>>"$LOG_FILE"; then
         echo "ERROR: Failed to write key files" >&2
         return 1
@@ -1211,10 +1198,10 @@ start_containers() {
     # Handle pending key import (volume couldn't be removed when Docker wasn't running)
     if [ -f "$DATA_DIR/.import-key-pending" ]; then
         log "Pending key import detected — removing old arti-state and tor-state volumes..."
-        # Both keystores must be wiped: arti-state holds the Arti key, tor-state
-        # holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The entrypoint
-        # only converts Arti→C Tor when CTOR_SECRET is missing, so a stale
-        # tor-state would silently override the imported identity.
+        # Both keystores must be wiped: arti-state holds the delivered PEM key,
+        # tor-state holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The
+        # entrypoint only converts PEM→C Tor when CTOR_SECRET is missing, so a
+        # stale tor-state would silently override the imported identity.
         for vol in onionpress-arti-state onionpress-tor-state; do
             docker volume rm "$vol" >> "$LOG_FILE" 2>&1 || true
             if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "$vol"; then
@@ -1308,7 +1295,8 @@ start_containers() {
         fi
 
         if [ -n "$VANITY_DIR" ]; then
-            # Create arti-state volume and install OpenSSH key to Arti keystore path
+            # Create the arti-state volume (historical name: the identity keystore)
+            # and install the PEM key where the entrypoint looks for it
             if ! docker volume create onionpress-arti-state >> "$LOG_FILE" 2>&1; then
                 log "ERROR: Failed to create arti-state volume"
                 return 1
@@ -1947,8 +1935,8 @@ restore_backup() {
     onion_address=$(bundled_python -c "import json, sys; print(json.load(open(sys.argv[1])).get('onion_address',''))" "$staging/metadata.json" 2>/dev/null || echo "")
     log "Restore: backup from $onion_address"
 
-    # 1. Restore Tor keys — accept either C Tor or Arti format.
-    #    Mac uses Arti only; if backup has only C Tor keys, convert to Arti PEM.
+    # 1. Restore Tor keys — accept either C Tor or PEM format.
+    #    The container takes the PEM; if the backup has only C Tor keys, derive it.
     local ctor_secret="$staging/tor-keys/hs_ed25519_secret_key"
     local ctor_public="$staging/tor-keys/hs_ed25519_public_key"
     local arti_key="$staging/tor-keys/ks_hs_id.ed25519_expanded_private"

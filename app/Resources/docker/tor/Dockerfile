@@ -1,31 +1,34 @@
 # OnionPress tor image.
 #
-# Built on the Tor Project's own onion-service container images — the Onimages
+# Built on the Tor Project's own onion-service container image — the Onimages
 # project (https://gitlab.torproject.org/tpo/onion-services/onimages/), published
-# at containers.torproject.org and rebuilt daily:
+# at containers.torproject.org and rebuilt daily. The runtime base is their
+# C Tor image for Debian trixie: it carries Tor from deb.torproject.org,
+# installed at THEIR build with the archive key's fingerprint verified, so this
+# file no longer sets up that apt source or fetches and checks the key itself.
 #
-#   * The runtime base is their C Tor image for Debian trixie. It carries Tor
-#     from deb.torproject.org, installed at THEIR build with the archive key's
-#     fingerprint verified, so this file no longer sets up that apt source or
-#     fetches and checks the key itself.
-#   * The arti binary is copied out of their arti image for the same Debian
-#     release, built with the onion-service-service feature (see the checks
-#     below). This file no longer compiles arti from crates.io, which was the
-#     20-40 minute part of every build.
+# C Tor is the only Tor implementation in this image. Arti was removed on
+# 2026-09-24: it hosts a site acceptably (20/20 services reachable in a
+# 2.6.0 test, after the usual "Too many preemptive onion service circuits
+# failed" churn), but it has no control interface, and everything that makes
+# OnionPress robust — sleep/wake DEL_ONION/ADD_ONION, the watchdog's stall
+# recovery, the OnionHeaven takeover pipeline — is built on the control port.
+# What remains of arti is its key file format: the launchers deliver the
+# onion service key as an OpenSSH PEM (ks_hs_id.ed25519_expanded_private) in
+# the historically named arti-state volume, OnionHeaven exchanges keys in
+# that format, and /key-convert.py turns it into C Tor's key files.
 #
-# Until Onimages 0.3.0 (2026-09-24) those images were amd64-only, which on
-# Apple Silicon meant QEMU emulation for the whole Tor stack — the reason this
-# image used to build everything itself. 0.3.0 added arm64, removing that
-# reason.
+# Until Onimages 0.3.0 (2026-09-24) the official images were amd64-only,
+# which on Apple Silicon meant QEMU emulation for the whole Tor stack — the
+# reason this image used to build everything itself. 0.3.0 added arm64.
 #
 # Every external input below is pinned to an immutable identifier: images by
 # multi-arch index digest, mkp224o by tag with its commit SHA asserted after
-# clone, arti by the version the pinned image is asserted to carry. Before
-# this, `FROM rust:latest` + `cargo install arti` (no --version) +
-# `MKP224O_COMMIT=master` meant two builds of the same commit could ship
-# different compilers, a different arti and a different mkp224o — and because
-# CI builds amd64 and arm64 on separate runners at different times, the two
-# halves of a single published manifest could disagree.
+# clone. Before this, `FROM rust:latest` + `cargo install arti` (no
+# --version) + `MKP224O_COMMIT=master` meant two builds of the same commit
+# could ship different compilers, a different arti and a different mkp224o —
+# and because CI builds amd64 and arm64 on separate runners at different
+# times, the two halves of a single published manifest could disagree.
 #
 # Digests must be the multi-arch INDEX digest (what
 # `docker buildx imagetools inspect <tag>` or build/base-image-digest.sh
@@ -40,17 +43,9 @@
 # scope) and re-declared inside any stage that needs them.
 
 ARG TOR_IMAGE=containers.torproject.org/tpo/onion-services/onimages/tor:trixie@sha256:636dc5d7ea28675f8bd4d9a1fe561a371f94e54250dad73ecc4825194283df6a
-ARG ARTI_IMAGE=containers.torproject.org/tpo/onion-services/onimages/arti:trixie@sha256:ff63f61ff3e68d3ce7301cdffcc54effcef96ff28e9ef79e579626e6c1a338ad
 ARG DOCKER_CLI_IMAGE=docker:29.8.1-cli@sha256:9f36dfce2d1fd053d700a4eca00c358df79bf7d8cb69d4a9e8d9981af18834ea
 
-# Stage 1: arti, from the Tor Project's arti image. A named stage so it is
-# pinned in one place with the rest; only /usr/local/bin/arti is copied out.
-# Their build links arti dynamically against Debian's libssl3 and libsqlite3
-# (no static-sqlite), which is why the runtime stage below must be the SAME
-# Debian release — trixie on both sides — and installs sqlite3.
-FROM ${ARTI_IMAGE} AS arti
-
-# Stage 2: Build mkp224o for vanity .onion address generation. Lives in this
+# Stage 1: Build mkp224o for vanity .onion address generation. Lives in this
 # container instead of the host so a single Architecture: all .deb works on
 # both amd64 and arm64 — Docker selects the right manifest variant at pull
 # time.
@@ -93,7 +88,7 @@ RUN git clone --depth 1 --branch "${MKP224O_VERSION}" \
 # and uses this binary to create OnionHeaven takeover containers.
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
-# Stage 3: Runtime — the Tor Project's C Tor image for Debian trixie.
+# Stage 2: Runtime — the Tor Project's C Tor image for Debian trixie.
 #
 # What it gives us: Debian trixie (their tpo/tpa/base-images/debian, upgraded
 # at their build), Tor from deb.torproject.org (0.4.9.x — Debian's own
@@ -110,16 +105,15 @@ FROM ${TOR_IMAGE}
 
 # The base switches to USER debian-tor for its own ENTRYPOINT (/usr/bin/tor).
 # /entrypoint.sh has to start as root: it fixes ownership on the state
-# volumes, writes /etc/tor/torrc, and drops privileges itself — su to
-# debian-tor for Tor, to arti for arti. Without this line every chown in the
-# entrypoint fails and Tor never starts.
+# volume, writes /etc/tor/torrc, and drops privileges itself with su to
+# debian-tor. Without this line every chown in the entrypoint fails and Tor
+# never starts.
 #
 # Numeric ids differ from the previous, debian:trixie-slim-based image
-# (debian-tor was 100:101 there and is 101:102 here; the arti user moves too).
-# Existing tor-state and arti-state volumes carry the old ids. That is fine
-# only because the entrypoint runs `chown -R` on both trees at every start
-# — keep that, and never chown a volume by number from the host side and
-# expect it to stay right.
+# (debian-tor was 100:101 there and is 101:102 here). Existing tor-state
+# volumes carry the old ids. That is fine only because the entrypoint runs
+# `chown -R` on /var/lib/tor at every start — keep that, and never chown a
+# volume by number from the host side and expect it to stay right.
 USER root
 
 # The base sets WORKDIR /etc/tor. Every path in the scripts is absolute, but
@@ -128,53 +122,23 @@ WORKDIR /
 
 # ca-certificates and wget are already in the base; they are listed anyway so
 # this image's own requirements do not depend on upstream's incidental
-# package choices. sqlite3 brings libsqlite3-0, which arti links against.
+# package choices. sqlite3 is the OnionHeaven registry's CLI.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     socat openssl ca-certificates sqlite3 python3 curl wget procps netcat-openbsd xxd \
     libsodium23 \
     && rm -rf /var/lib/apt/lists/*
 # Docker CLI for heartbeat to manage takeover containers via docker exec/run
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
-RUN useradd -r -m -s /bin/false arti
-COPY --from=arti /usr/local/bin/arti /usr/local/bin/arti
 COPY --from=mkp224o-builder /build/mkp224o/mkp224o /usr/local/bin/mkp224o
-
-# ARTI_IMAGE and ARTI_VERSION move together. The digest pins the binary; this
-# names what that binary is, and the build fails if the two disagree — so a
-# digest bump that brings a new arti is a conscious step, not a surprise found
-# in a running site. Upstream builds arti with no --version (newest crate on
-# their build day), so this is the only place the version is written down.
-#
-# `arti hss` exists only when arti was built with the onion-service-service
-# feature — what lets this image HOST a site rather than only reach one.
-# Upstream enables it today; if that ever changes, fail the build here rather
-# than the site at first start. It also proves the copied binary finds its
-# shared libraries in this stage.
-ARG ARTI_VERSION=2.6.0
-RUN actual="$(arti --version 2>/dev/null | head -n 1)" \
-    && if [ "$actual" != "Arti ${ARTI_VERSION}" ]; then \
-         echo "ERROR: the pinned arti image carries '${actual}'," >&2; \
-         echo "       expected 'Arti ${ARTI_VERSION}'. After bumping ARTI_IMAGE," >&2; \
-         echo "       set ARTI_VERSION to what that image ships. Refusing to build." >&2; \
-         exit 1; \
-       fi \
-    && arti hss --help >/dev/null \
-    && tor --version | head -n 1
+# Record what the pinned base shipped, in the build log where a digest bump
+# is reviewed.
+RUN tor --version | head -n 1
 
 # No CACHEBUST ARG: it sat above only the COPY block, whose cache Docker
 # already keys on file content, and below the apt/cargo/git stages that
 # actually drifted. It was never passed as --build-arg by anything, so it was
 # a hand-edited string that invalidated the layers least in need of it. Now
 # that the drifting stages are pinned, bump the pin instead.
-COPY arti.toml /etc/arti/arti.toml
-COPY arti-polling.toml /etc/arti/arti-polling.toml
-COPY arti-onionheaven.toml /etc/arti/arti-onionheaven.toml
-# COPY keeps the source file's mode, and git does not track modes beyond the
-# executable bit — a checkout made under umask 002 has these as 664. arti
-# refuses a group-writable config outright ("must be g-w"), and in SOCKS-only
-# mode the entrypoint then falls through to the wrong branch. Normalise here
-# so the image does not depend on the umask of whoever built it.
-RUN chmod 644 /etc/arti/*.toml
 COPY entrypoint.sh /entrypoint.sh
 COPY healthcheck-server.sh /healthcheck-server.sh
 COPY onionheaven-redirect.sh /onionheaven-redirect.sh
