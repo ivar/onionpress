@@ -71,7 +71,7 @@ about. So you know what you are trusting:
 | `AppIcon.icns`, `app-icon.png` | byte-identical to the committed files |
 | menubar PNGs | `running`, `starting` pixel-identical; `stopped` within 2/255 (see [Generated assets](#generated-assets)) |
 | extensions | byte-reproducible across runs |
-| `docker-publish.yml` | ran end to end in a fork (`ivar/onionpress`, run 35479901478, 2026-09-20) on GitHub-hosted runners only — amd64 on `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`. All three images published under the fork's own namespace as OCI indexes carrying both platforms; the stress worker's `FROM` resolved to the tor index the same run had merged 20 s earlier. 8 min 50 s cold; tor 6 min 56 s (amd64) / 4 min 45 s (arm64) |
+| `docker-publish.yml` | ran end to end in a fork (`ivar/onionpress`, run 36064530531, 2026-09-24, on the C Tor-only image) on GitHub-hosted runners only — amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. All three images published under the fork's own namespace as OCI indexes carrying `linux/amd64` and `linux/arm64`; the stress worker's `FROM` resolved to the tor index the same run had merged seconds earlier. 2 min 12 s end to end; tor 58 s (amd64) / 55 s (arm64). The previous run on the arti-compiling image (35479901478, 2026-09-20) took 8 min 50 s |
 
 One forward-looking note from the DMG log: on macOS 27 `hdiutil create`,
 `hdiutil attach` and `hdiutil convert` each print a deprecation warning
@@ -92,7 +92,7 @@ export LIMA_HOME="$COLIMA_HOME/_lima"
 export DOCKER_CONFIG="$COLIMA_HOME/docker-config"
 export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
 colima start --cpu 6 --memory 8 --disk 20      # first time: downloads a ~200 MB VM image
-build/build-images.sh tor                      # under a minute once the base images are pulled
+build/build-images.sh tor                      # under a minute once the base image is pulled
 colima stop                                    # frees the RAM; the layer cache stays
 ```
 
@@ -216,7 +216,7 @@ build/build-images.sh --help       # every flag
 
 | Image | Context | Cold build time |
 |---|---|---|
-| `onionpress-tor:dev` | `app/Resources/docker/tor` | about a minute, plus a one-time ~400 MB pull of the two Tor Project base images; only mkp224o is compiled |
+| `onionpress-tor:dev` | `app/Resources/docker/tor` | about a minute, plus a one-time ~260 MB pull of the Tor Project base image; only mkp224o is compiled |
 | `onionpress-wordpress:dev` | `app/Resources/docker/wordpress` | seconds |
 | `onionpress-stress-worker:dev` | `tests/stress` | seconds, chains off your local tor image |
 

@@ -31,7 +31,7 @@ make doctor        # tells you which tools below you have and which you lack
 
 | Artifact | Command | Host OS | Measured time |
 |---|---|---|---|
-| Container images (tor, wordpress) | `make images` | any with Docker | tor under 1 min once its two Tor Project base images are pulled; wordpress ≈ 1 min |
+| Container images (tor, wordpress) | `make images` | any with Docker | tor under 1 min once its Tor Project base image is pulled; wordpress ≈ 1 min |
 | Run the stack on those images | `make dev-up` | any with Docker | seconds |
 | macOS installer `onionpress.dmg` | `make dmg` | **macOS** | ≈ 4 min (first run downloads ≈ 200 MB) |
 | Linux package `onionpress.deb` | `make deb` | any | seconds |
@@ -220,7 +220,7 @@ export DOCKER_CONFIG="$COLIMA_HOME/docker-config"
 export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
 
 colima start --cpu 6 --memory 8 --disk 20    # first time: downloads a ~200 MB VM image
-build/build-images.sh tor                    # under a minute once the base images are pulled
+build/build-images.sh tor                    # under a minute once the base image is pulled
 colima stop                                  # frees the RAM; the layer cache stays
 # rm -rf ~/.colima-build                     # when you want the disk back
 ```
@@ -443,7 +443,7 @@ Every command in this document was run, and its output checked, on:
 | Docker | client 27.5.1 / server 27.4.0 (Colima 0.8.1), Compose 2.40.2 — classic builder, no buildx |
 | tor image | under a minute after pulling the Tor Project base image, isolated Colima 6 CPU / 8 GB |
 | DMG | 3 min 43 s, dev-grade |
-| `docker-publish.yml` | 8 min 50 s end to end in a fork, GitHub-hosted runners only (`ubuntu-24.04`, `ubuntu-24.04-arm`), cold cache, all three images amd64 + arm64 |
+| `docker-publish.yml` | 2 min 12 s end to end in a fork (run 36064530531, 2026-09-24), GitHub-hosted runners only (`ubuntu-latest`, `ubuntu-24.04-arm`), all three images amd64 + arm64; was 8 min 50 s when the tor image still compiled arti |
 
 Not exercised: an Intel Mac host, Windows/WSL2, the buildx code path, a
 release-grade DMG (needs the python.org interpreter), Linux native `dpkg-deb`
