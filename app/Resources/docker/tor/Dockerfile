@@ -1,48 +1,63 @@
 # OnionPress tor image.
 #
-# Every external input below is pinned to an immutable identifier: base images
-# by multi-arch index digest, the arti crate by version, mkp224o by tag with
-# its commit SHA asserted after clone. Before this, `FROM rust:latest` +
-# `cargo install arti` (no --version) + `MKP224O_COMMIT=master` meant two
-# builds of the same commit could ship different compilers, a different arti
-# and a different mkp224o — and because CI builds amd64 and arm64 on separate
-# runners at different times, the two halves of a single published manifest
-# could disagree. "The v2.4.110 tor image" had no single Tor version.
+# Built on the Tor Project's own onion-service container images — the Onimages
+# project (https://gitlab.torproject.org/tpo/onion-services/onimages/), published
+# at containers.torproject.org and rebuilt daily:
+#
+#   * The runtime base is their C Tor image for Debian trixie. It carries Tor
+#     from deb.torproject.org, installed at THEIR build with the archive key's
+#     fingerprint verified, so this file no longer sets up that apt source or
+#     fetches and checks the key itself.
+#   * The arti binary is copied out of their arti image for the same Debian
+#     release, built with the onion-service-service feature (see the checks
+#     below). This file no longer compiles arti from crates.io, which was the
+#     20-40 minute part of every build.
+#
+# Until Onimages 0.3.0 (2026-09-24) those images were amd64-only, which on
+# Apple Silicon meant QEMU emulation for the whole Tor stack — the reason this
+# image used to build everything itself. 0.3.0 added arm64, removing that
+# reason.
+#
+# Every external input below is pinned to an immutable identifier: images by
+# multi-arch index digest, mkp224o by tag with its commit SHA asserted after
+# clone, arti by the version the pinned image is asserted to carry. Before
+# this, `FROM rust:latest` + `cargo install arti` (no --version) +
+# `MKP224O_COMMIT=master` meant two builds of the same commit could ship
+# different compilers, a different arti and a different mkp224o — and because
+# CI builds amd64 and arm64 on separate runners at different times, the two
+# halves of a single published manifest could disagree.
 #
 # Digests must be the multi-arch INDEX digest (what
-# `docker buildx imagetools inspect <tag>` reports), not a per-platform
-# manifest digest — the latter resolves on amd64 and 404s on the arm64 runner.
-# See docs/BUILDING.md, "Bumping a pinned input".
+# `docker buildx imagetools inspect <tag>` or build/base-image-digest.sh
+# reports), not a per-platform manifest digest — the latter resolves on amd64
+# and 404s on the arm64 runner. The Onimages tags themselves move every day;
+# only the digest names one specific build. containers.torproject.org keeps
+# untagged manifests (the Tor sysadmins' cron only collects unreferenced
+# layers), so a pinned digest stays pullable after the tag moves on. See
+# docs/BUILDING.md, "Bumping a pinned input".
 #
 # ARGs used in FROM lines must be declared before the first FROM (global
 # scope) and re-declared inside any stage that needs them.
 
-ARG RUST_IMAGE=rust:1.98.1-trixie@sha256:462a9af3c54fb4718850d3c602fc0e54452c20b1c12a4e4080fdb001d4b9acbf
-ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+ARG TOR_IMAGE=containers.torproject.org/tpo/onion-services/onimages/tor:trixie@sha256:636dc5d7ea28675f8bd4d9a1fe561a371f94e54250dad73ecc4825194283df6a
+ARG ARTI_IMAGE=containers.torproject.org/tpo/onion-services/onimages/arti:trixie@sha256:ff63f61ff3e68d3ce7301cdffcc54effcef96ff28e9ef79e579626e6c1a338ad
 ARG DOCKER_CLI_IMAGE=docker:29.8.1-cli@sha256:9f36dfce2d1fd053d700a4eca00c358df79bf7d8cb69d4a9e8d9981af18834ea
 
-# Stage 1: Compile Arti from source — builds native arch (arm64 on Apple Silicon)
-# The official Tor Project image is amd64-only, which forces qemu emulation on
-# ARM Macs. Building from source gives us a native binary instead.
-#
-# NOT the -slim rust variant: arti's default features resolve
-# default -> default-runtime -> native-tls -> openssl-sys, which needs
-# pkg-config and libssl-dev. rust:slim-trixie ships only ca-certificates, gcc
-# and libc6-dev, so -slim fails to compile. The full variant is FROM
-# buildpack-deps:trixie and has them. Size is irrelevant here — this is a
-# builder stage, discarded once /usr/local/cargo/bin/arti is copied out.
-#
-# ARTI_VERSION and RUST_IMAGE move together: arti requires a minimum Rust, so
-# bumping one without the other fails ~20 minutes into a release-mode compile.
-FROM ${RUST_IMAGE} AS builder
-ARG ARTI_VERSION=2.6.0
-RUN cargo install arti --locked --version "${ARTI_VERSION}" \
-      --features onion-service-service,static-sqlite
+# Stage 1: arti, from the Tor Project's arti image. A named stage so it is
+# pinned in one place with the rest; only /usr/local/bin/arti is copied out.
+# Their build links arti dynamically against Debian's libssl3 and libsqlite3
+# (no static-sqlite), which is why the runtime stage below must be the SAME
+# Debian release — trixie on both sides — and installs sqlite3.
+FROM ${ARTI_IMAGE} AS arti
 
 # Stage 2: Build mkp224o for vanity .onion address generation. Lives in this
 # container instead of the host so a single Architecture: all .deb works on
 # both amd64 and arm64 — Docker selects the right manifest variant at pull
 # time.
+#
+# Built ON the tor base image rather than on a separate Debian pin, so the
+# binary is compiled against exactly the glibc and libsodium the runtime stage
+# has, and so the image has one Debian to keep in step instead of two.
 #
 # Cloned by tag, then the resolved commit is ASSERTED against the expected
 # SHA. A tag is a movable pointer, so the tag alone is not a pin; fetching the
@@ -50,7 +65,8 @@ RUN cargo install arti --locked --version "${ARTI_VERSION}" \
 # arbitrary SHA1-in-want. Clone-by-tag plus assert gives a readable reference
 # and a real pin. Keep MKP224O_COMMIT in step with build/build-dmg-simple.sh's
 # MKP224O_VERSION, which cross-compiles the same release for the macOS host.
-FROM ${DEBIAN_IMAGE} AS mkp224o-builder
+FROM ${TOR_IMAGE} AS mkp224o-builder
+USER root
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev make autoconf automake libsodium-dev pkg-config \
     git ca-certificates \
@@ -77,66 +93,66 @@ RUN git clone --depth 1 --branch "${MKP224O_VERSION}" \
 # and uses this binary to create OnionHeaven takeover containers.
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 
-# Stage 3: Runtime — Debian stable (trixie). Use Tor Project's own repo for
-# latest stable Tor (0.4.9.x) instead of Debian's older 0.4.8.16 which has
-# false-positive "compression bomb" warnings that break onion services after ~20h.
+# Stage 3: Runtime — the Tor Project's C Tor image for Debian trixie.
 #
-# The `tor` package is deliberately NOT version-pinned. deb.torproject.org
-# removes superseded versions from the mirror, so a version pin becomes
-# `E: Version '…' was not found` within weeks, and the repo publishes no
-# snapshot service to pin against. The immutable identifier that actually
-# protects users is the published image digest in build/image-pins.env; the
-# base-image digest above is the right granularity for the Debian packages.
-# What matters for supply chain is that the signing key is verified — see below.
-FROM ${DEBIAN_IMAGE}
+# What it gives us: Debian trixie (their tpo/tpa/base-images/debian, upgraded
+# at their build), Tor from deb.torproject.org (0.4.9.x — Debian's own
+# 0.4.8.16 has false-positive "compression bomb" warnings that break onion
+# services after ~20h), the debian-tor user, and the deb.torproject.org apt
+# source left configured with its verified keyring.
+#
+# Tor itself is deliberately NOT reinstalled or version-pinned here. The
+# version is fixed by the base-image digest above; an `apt-get install tor`
+# in this stage would silently upgrade it to whatever deb.torproject.org
+# serves on build day, and a version pin becomes `E: Version '…' was not
+# found` within weeks because that mirror drops superseded packages.
+FROM ${TOR_IMAGE}
 
-# TOR_APT_KEY_FPR is intentionally ENV, not ARG: an ARG can be overridden with
-# --build-arg, which would let a builder point the fetch and the assertion at
-# the same substituted key, making the check self-certifying and useless.
-ENV TOR_APT_KEY_FPR=A3C4F0F979CAA22CDBA8F512EE8CBC9E886DDD89
+# The base switches to USER debian-tor for its own ENTRYPOINT (/usr/bin/tor).
+# /entrypoint.sh has to start as root: it fixes ownership on the state
+# volumes, writes /etc/tor/torrc, and drops privileges itself — su to
+# debian-tor for Tor, to arti for arti. Without this line every chown in the
+# entrypoint fails and Tor never starts.
+USER root
 
-# `curl -f` matters here. Without it curl exits 0 on an HTTP error and writes
-# the error page to the output file; the build only failed today because
-# `gpg --dearmor` happens to choke on HTML, which is luck, not a check.
-#
-# The key URL being *named* after a fingerprint is not verification either.
-# gpg --show-keys re-derives the fingerprint from the fetched bytes and we
-# compare it, so a substituted key at that URL fails the build.
-#
-# It compares EVERY primary key in the file, not just the first. `--dearmor`
-# decodes the whole file into the keyring, and apt's `signed-by=` trusts any
-# key in there — so checking only the first fingerprint would let an attacker
-# APPEND a second key after the genuine one and have it trusted while the
-# assertion still passed. The awk prints the fpr record that follows each
-# `pub` (primary keys only, skipping subkey fprs), and the comparison demands
-# that list be exactly the one expected fingerprint.
+# The base sets WORKDIR /etc/tor. Every path in the scripts is absolute, but
+# a relative path must not quietly resolve inside Tor's config directory.
+WORKDIR /
+
+# ca-certificates and wget are already in the base; they are listed anyway so
+# this image's own requirements do not depend on upstream's incidental
+# package choices. sqlite3 brings libsqlite3-0, which arti links against.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    socat openssl ca-certificates sqlite3 python3 curl wget procps netcat-openbsd xxd gpg \
+    socat openssl ca-certificates sqlite3 python3 curl wget procps netcat-openbsd xxd \
     libsodium23 \
-    && curl -fsSL "https://deb.torproject.org/torproject.org/${TOR_APT_KEY_FPR}.asc" \
-       -o /tmp/tor-archive-keyring.asc \
-    && gpg --show-keys --with-colons /tmp/tor-archive-keyring.asc \
-       | awk -F: '$1=="pub"{p=1;next} $1=="fpr" && p {print $10; p=0}' \
-       > /tmp/tor-key-fprs \
-    && if [ "$(cat /tmp/tor-key-fprs)" != "${TOR_APT_KEY_FPR}" ]; then \
-         echo "ERROR: Tor apt signing key does not match expectations." >&2; \
-         echo "       expected exactly one primary key:" >&2; \
-         echo "         ${TOR_APT_KEY_FPR}" >&2; \
-         echo "       got:" >&2; \
-         sed 's/^/         /' /tmp/tor-key-fprs >&2; \
-         exit 1; \
-       fi \
-    && gpg --dearmor -o /usr/share/keyrings/tor-archive-keyring.gpg /tmp/tor-archive-keyring.asc \
-    && rm -f /tmp/tor-archive-keyring.asc /tmp/tor-key-fprs \
-    && echo 'deb [signed-by=/usr/share/keyrings/tor-archive-keyring.gpg] https://deb.torproject.org/torproject.org trixie main' \
-       > /etc/apt/sources.list.d/tor.list \
-    && apt-get update && apt-get install -y --no-install-recommends tor \
     && rm -rf /var/lib/apt/lists/*
 # Docker CLI for heartbeat to manage takeover containers via docker exec/run
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN useradd -r -m -s /bin/false arti
-COPY --from=builder /usr/local/cargo/bin/arti /usr/local/bin/arti
+COPY --from=arti /usr/local/bin/arti /usr/local/bin/arti
 COPY --from=mkp224o-builder /build/mkp224o/mkp224o /usr/local/bin/mkp224o
+
+# ARTI_IMAGE and ARTI_VERSION move together. The digest pins the binary; this
+# names what that binary is, and the build fails if the two disagree — so a
+# digest bump that brings a new arti is a conscious step, not a surprise found
+# in a running site. Upstream builds arti with no --version (newest crate on
+# their build day), so this is the only place the version is written down.
+#
+# `arti hss` exists only when arti was built with the onion-service-service
+# feature — what lets this image HOST a site rather than only reach one.
+# Upstream enables it today; if that ever changes, fail the build here rather
+# than the site at first start. It also proves the copied binary finds its
+# shared libraries in this stage.
+ARG ARTI_VERSION=2.6.0
+RUN actual="$(arti --version 2>/dev/null | head -n 1)" \
+    && if [ "$actual" != "Arti ${ARTI_VERSION}" ]; then \
+         echo "ERROR: the pinned arti image carries '${actual}'," >&2; \
+         echo "       expected 'Arti ${ARTI_VERSION}'. After bumping ARTI_IMAGE," >&2; \
+         echo "       set ARTI_VERSION to what that image ships. Refusing to build." >&2; \
+         exit 1; \
+       fi \
+    && arti hss --help >/dev/null \
+    && tor --version | head -n 1
 
 # No CACHEBUST ARG: it sat above only the COPY block, whose cache Docker
 # already keys on file content, and below the apt/cargo/git stages that
@@ -146,6 +162,12 @@ COPY --from=mkp224o-builder /build/mkp224o/mkp224o /usr/local/bin/mkp224o
 COPY arti.toml /etc/arti/arti.toml
 COPY arti-polling.toml /etc/arti/arti-polling.toml
 COPY arti-onionheaven.toml /etc/arti/arti-onionheaven.toml
+# COPY keeps the source file's mode, and git does not track modes beyond the
+# executable bit — a checkout made under umask 002 has these as 664. arti
+# refuses a group-writable config outright ("must be g-w"), and in SOCKS-only
+# mode the entrypoint then falls through to the wrong branch. Normalise here
+# so the image does not depend on the umask of whoever built it.
+RUN chmod 644 /etc/arti/*.toml
 COPY entrypoint.sh /entrypoint.sh
 COPY healthcheck-server.sh /healthcheck-server.sh
 COPY onionheaven-redirect.sh /onionheaven-redirect.sh
@@ -163,3 +185,7 @@ COPY onionnames.py /onionnames.py
 COPY wordlists /wordlists
 RUN chmod +x /entrypoint.sh /healthcheck-server.sh /onionheaven-redirect.sh /onionheaven-tor-manager.sh /onionheaven-heartbeat.py /web-server.py /onionheaven-takeover-worker.py /onionheaven-queue-manager.py /key-convert.py /tor-watchdog.py
 ENTRYPOINT ["/entrypoint.sh"]
+# A new ENTRYPOINT resets an inherited CMD, but say so: the base's CMD is a
+# list of tor flags (--RunAsDaemon 0 --HiddenServiceDir …) that would
+# otherwise arrive as /entrypoint.sh's arguments.
+CMD []

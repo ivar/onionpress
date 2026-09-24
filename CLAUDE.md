@@ -54,10 +54,27 @@
 - **Every `docker pull` is gated on `using_local_images()`** — implemented three
   times (app/MacOS/onionpress, linux/onionpress, onionpress.containers). Change
   all three together; a test enforces they agree.
+- **The tor image is built on the Tor Project's own Onimages images**
+  (`containers.torproject.org/tpo/onion-services/onimages/{tor,arti}:trixie`,
+  amd64 + arm64 since Onimages 0.3.0, 2026-09-24). Their C Tor image is the
+  runtime base — Tor and the verified deb.torproject.org keyring come from it,
+  so the Dockerfile no longer sets up that apt source or key — and their arti
+  image supplies `/usr/local/bin/arti`. Nothing compiles arti any more; a tor
+  image build is under a minute. The base ends in `USER debian-tor`; the
+  Dockerfile must `USER root` again (the entrypoint drops privileges itself)
+  and `CMD []` (a test enforces both).
 - **All Dockerfile inputs are pinned** as `ARG` defaults in the Dockerfiles
-  themselves (base images by multi-arch index digest, arti by version, mkp224o
-  by commit, wp-cli by sha256). `MKP224O_VERSION` must match
-  `build/build-dmg-simple.sh`; `ARTI_VERSION` and `RUST_IMAGE` move together.
+  themselves (images by multi-arch index digest, mkp224o by commit, wp-cli by
+  sha256). `MKP224O_VERSION` must match `build/build-dmg-simple.sh`.
+  `ARTI_IMAGE` and `ARTI_VERSION` move together — the build asserts
+  `arti --version` and that `arti hss` exists (onion-service support) — and
+  `TOR_IMAGE`/`ARTI_IMAGE` must carry the same Debian release tag (arti links
+  dynamically against the base's libssl/libsqlite3).
+  `build/base-image-digest.sh <ref>` resolves a tag to its multi-arch index
+  digest on any registry, no daemon needed; it refuses single-platform
+  manifests. containers.torproject.org keeps untagged manifests (TPA's
+  Saturday cron only collects unreferenced layers), so a pinned digest stays
+  pullable after the daily rebuild moves the tag.
 - **`build/build-dmg.sh` was deleted** — it thinned universal binaries to
   arm64-only and damaged real bundles via a lowercase-path match on APFS.
   `make build` now runs `build-dmg-simple.sh`.

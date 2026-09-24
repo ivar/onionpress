@@ -10,8 +10,8 @@ the network for — and why each of those is the way it is.
 steps, without the history.
 
 **"Local" here means buildable on your machine, not hermetic.** The builds
-still fetch from upstream package sources — Debian, crates.io, Docker Hub,
-the Tor Project apt repo. Vendoring those is out of scope and would not be
+still fetch from upstream package sources — Debian, Docker Hub, the Tor
+Project's container registry and apt repo. Vendoring those is out of scope and would not be
 realistic for a WordPress + Tor stack. What *is* in scope is that nothing
 requires access to the project's CI, its registry credentials, or anyone's
 self-hosted runner, and that the inputs are pinned so your build and the
@@ -43,7 +43,7 @@ make doctor        # which build tools you have, and what each missing one costs
 
 | You want | Command | Host OS | Reaches out to |
 |---|---|---|---|
-| tor + wordpress images | `make images` | any | Docker Hub, crates.io, Debian, deb.torproject.org, GitHub |
+| tor + wordpress images | `make images` | any | containers.torproject.org, Docker Hub, Debian, deb.torproject.org, GitHub |
 | run the stack on them | `make dev-up` | any | — |
 | macOS installer (`.dmg`) | `make dmg` | **macOS** | GitHub releases, Docker, python.org/PyPI, libsodium |
 | Linux package (`.deb`) | `make deb` | any | — |
@@ -67,7 +67,7 @@ about. So you know what you are trusting:
 | `.deb` | builds on macOS via the pure-Python `ar` fallback; ships 0 stale `.pyc` (was 18) |
 | `.dmg` | full path — pinned binary downloads, libsodium + mkp224o cross-compile (universal), py2app, signing, `hdiutil`. 160 MB, version verified. **Dev-grade**: with `uv` the bundled Python is arm64-only; release-grade needs the python.org universal2 3.14 installer |
 | `onionpress-wordpress` image | builds with the classic builder; wp-cli 2.12.0 with the pinned sha256 in the image; a wrong `WP_CLI_SHA256` fails at `sha256sum -c` **before** `chmod +x`; a wrong base digest fails at `FROM` |
-| `onionpress-tor` image | builds (isolated 6-CPU/8 GB Colima VM); baked in: Tor 0.4.9.12, Arti 2.6.0, Docker 29.8.1, mkp224o v1.7.0; **exactly one** key in the apt keyring, fingerprint `A3C4…DD89`; 0 `.pyc` under `/wordlists`; a wrong `MKP224O_COMMIT` fails at the post-clone assert |
+| `onionpress-tor` image | builds on the Tor Project's Onimages `tor:trixie` + `arti:trixie` images in 26 s once those are pulled (isolated Colima VM, classic builder — no arti compile any more); baked in: Tor 0.4.9.13, Arti 2.6.0 with `arti hss` present, Docker 29.8.1, mkp224o v1.7.0 against the base's libsodium; image user root, `CMD []`, every arti config 644; the unchanged entrypoint bootstraps both C Tor and arti; the stress worker chains off it; 0 `.pyc` under `/wordlists`; a wrong `ARTI_VERSION` fails at the build-time assert, a wrong `MKP224O_COMMIT` at the post-clone assert |
 | `AppIcon.icns`, `app-icon.png` | byte-identical to the committed files |
 | menubar PNGs | `running`, `starting` pixel-identical; `stopped` within 2/255 (see [Generated assets](#generated-assets)) |
 | extensions | byte-reproducible across runs |
@@ -79,10 +79,11 @@ pointing at `diskutil image …`. They still work today; a future macOS may
 remove them, and `build/build-dmg-simple.sh` uses all three.
 
 **Building the tor image without disturbing a running OnionPress.** Its VM
-is 1 GB by default — not enough to compile arti — and it is your live site.
-Rather than resizing it, run a second, isolated Colima instance under its own
-home; nothing under `~/.onionpress` is touched, and deleting the directory
-reclaims everything:
+is your live site, and at 1 GB it is sized for running the stack. The tor
+build is light now that arti comes prebuilt from the Tor Project's image
+(apt plus a short mkp224o compile), but build beside the live VM, not in it:
+run a second, isolated Colima instance under its own home; nothing under
+`~/.onionpress` is touched, and deleting the directory reclaims everything:
 
 ```bash
 export PATH="/Applications/OnionPress.app/Contents/Resources/bin:$PATH"
@@ -91,7 +92,7 @@ export LIMA_HOME="$COLIMA_HOME/_lima"
 export DOCKER_CONFIG="$COLIMA_HOME/docker-config"
 export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
 colima start --cpu 6 --memory 8 --disk 20      # first time: downloads a ~200 MB VM image
-build/build-images.sh tor                      # 20-40 min natively
+build/build-images.sh tor                      # under a minute once the base images are pulled
 colima stop                                    # frees the RAM; the layer cache stays
 ```
 
@@ -215,7 +216,7 @@ build/build-images.sh --help       # every flag
 
 | Image | Context | Cold build time |
 |---|---|---|
-| `onionpress-tor:dev` | `app/Resources/docker/tor` | **tens of minutes** — compiles arti from source |
+| `onionpress-tor:dev` | `app/Resources/docker/tor` | about a minute, plus a one-time ~400 MB pull of the two Tor Project base images; only mkp224o is compiled |
 | `onionpress-wordpress:dev` | `app/Resources/docker/wordpress` | seconds |
 | `onionpress-stress-worker:dev` | `tests/stress` | seconds, chains off your local tor image |
 
@@ -241,8 +242,9 @@ export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
 colima start
 ```
 
-That VM is sized for *running* the stack (1 GB RAM by default), which is fine
-for the wordpress image and slow for arti.
+That VM is sized for *running* the stack (1 GB RAM by default) and it is your
+live site. The build is light now that arti is not compiled here, but prefer
+the isolated instance described above all the same.
 
 ### Shadow tags, and why a local build also tags the GHCR name
 
@@ -272,8 +274,9 @@ By default you build for your host's native platform. Multi-arch needs
 image store — a tag there resolves to exactly one manifest. The script refuses
 that combination up front rather than failing at the end of a long build.
 
-Cross-building the **tor** image is a QEMU-emulated Rust compile and takes
-hours. CI avoids it entirely: `docker-publish.yml` builds amd64 on
+Cross-building the **tor** image runs its apt steps and the mkp224o compile
+under QEMU — hours back when it also compiled arti, still slow. CI avoids it
+entirely: `docker-publish.yml` builds amd64 on
 `ubuntu-latest` and arm64 on `ubuntu-24.04-arm` — both GitHub-hosted, both
 free for public repositories — then merges the two with
 `docker buildx imagetools create`. Until September 2026 the arm64 half ran on
@@ -351,19 +354,58 @@ would be one more thing to forget.
 
 | Input | Where | Pinned as |
 |---|---|---|
-| Rust toolchain (arti builder) | tor | `ARG RUST_IMAGE` — tag + index digest |
-| Debian (mkp224o builder + runtime) | tor | `ARG DEBIAN_IMAGE` — tag + index digest |
+| Tor Project C Tor image (runtime base, and the mkp224o builder) | tor | `ARG TOR_IMAGE` — Onimages `tor:trixie`, tag + index digest |
+| Tor Project arti image | tor | `ARG ARTI_IMAGE` — Onimages `arti:trixie`, named stage, tag + index digest; `ARG ARTI_VERSION` asserted against `arti --version` at build, and `arti hss --help` proves onion-service support |
 | Docker CLI | tor | `ARG DOCKER_CLI_IMAGE` — named stage, tag + digest |
-| arti crate | tor | `ARG ARTI_VERSION` + `cargo install --version` |
 | mkp224o | tor | `ARG MKP224O_VERSION` + `ARG MKP224O_COMMIT`, asserted after clone |
-| Tor apt signing key | tor | `ENV TOR_APT_KEY_FPR`, fingerprint asserted |
+| Tor apt signing key | tor | verified inside the Tor Project's own image build (fingerprint `A3C4…DD89`); this repo pins the resulting image by digest instead |
 | WordPress base | wordpress | `ARG WORDPRESS_IMAGE` — tag + index digest |
 | wp-cli | wordpress | `ARG WP_CLI_VERSION` + `ARG WP_CLI_SHA256`, verified |
 | tor image (stress worker) | tests/stress | `ARG TOR_IMAGE`, supplied by the builder |
 
 `tests/test_dockerfile_pins.py` fails if any base image loses its digest, if
-`cargo install arti` loses `--version`, if `MKP224O_COMMIT` stops being a full
-SHA, if either supply-chain assertion is removed, or if a `curl` loses `-f`.
+the runtime base or the arti stage stops being the Tor Project's image, if the
+`ARTI_VERSION` or `arti hss` build-time checks are removed, if the two Onimages
+tags stop matching, if `USER root` or `CMD []` go missing from the runtime
+stage, if `MKP224O_COMMIT` stops being a full SHA, if the wp-cli checksum is
+removed, or if a `curl` loses `-f`.
+
+### The Tor Project's images
+
+The tor image is built **on** the Tor Project's own onion-service container
+images — the [Onimages](https://gitlab.torproject.org/tpo/onion-services/onimages/)
+project, published at `containers.torproject.org/tpo/onion-services/onimages/`
+and documented at
+[onionservices.torproject.org](https://onionservices.torproject.org/apps/base/containers/):
+
+- **`tor:trixie`** is the runtime base: Debian 13 from TPA's own base image,
+  `apt-get upgrade`d at their build, with Tor from deb.torproject.org (0.4.9.x
+  — Debian's own 0.4.8.16 has false-positive "compression bomb" warnings that
+  break onion services after ~20h). Their build fetches the archive key and
+  checks its fingerprint before trusting it, and leaves the apt source and
+  keyring configured. It ends in `USER debian-tor` and
+  `ENTRYPOINT ["/usr/bin/tor"]`, so the Dockerfile switches back to root (the
+  entrypoint drops privileges itself) and clears the inherited `CMD`.
+- **`arti:trixie`** supplies `/usr/local/bin/arti`, built by upstream with
+  `--features onion-service-service,restricted-discovery`. It links
+  dynamically against Debian's libssl3 and libsqlite3, which is why both
+  images must carry the **same Debian release tag** and the runtime stage
+  installs `sqlite3`.
+
+Upstream rebuilds these **daily** and the tags move; a digest is the only
+thing that names one specific build. The Tor sysadmins' [registry
+notes](https://gitlab.torproject.org/tpo/tpa/team/-/wikis/service/gitlab)
+say untagged manifests are deliberately *not* purged (a Saturday cron only
+collects unreferenced layers), so a pinned digest stays pullable after the
+tag has moved on — with the stated caveat that purging is a policy they could
+adopt if the registry ran out of space. If a pinned digest ever 404s, the fix
+is to bump it, not to drop the pin.
+
+Before Onimages 0.3.0 (2026-09-24) the images were amd64-only, which on Apple
+Silicon meant QEMU emulation for the whole Tor stack; that is why this image
+used to compile arti from crates.io and install Tor itself. 0.3.0 added arm64.
+Upstream labels the images experimental; the trixie variants use only Tor
+Project package sources.
 
 ### The two supply-chain fixes
 
@@ -378,22 +420,24 @@ sha256 is verified *before* the file is made executable.
 **The Tor apt signing key was fetched but never checked.** The URL is *named*
 after a fingerprint, which is not verification: nothing compared the fetched
 key's actual fingerprint to that name, so a substituted key at that URL would
-have been installed and trusted. `gpg --show-keys` now re-derives the
-fingerprint from the fetched bytes and the build fails on mismatch.
-
-`TOR_APT_KEY_FPR` is an `ENV`, not an `ARG`, and that distinction is
-load-bearing: an `ARG` can be overridden with `--build-arg`, which would let a
-builder point *both* the fetch and the assertion at the same substituted key —
-a self-certifying check that proves nothing.
+have been installed and trusted. This repo first fixed that with its own
+`gpg --show-keys` assertion. Since the move onto the Onimages base the fetch
+happens in the Tor Project's own image build (their `get-tor-debian-key`
+helper checks the same fingerprint), and this Dockerfile no longer touches the
+key at all — a test fails if a second apt source or key fetch comes back. What
+this repo verifies instead is the identity of the resulting image, its digest,
+plus the arti version and onion-service checks above.
 
 ### What is deliberately not pinned
 
-**The `tor` apt package.** `deb.torproject.org` removes superseded versions
-from its mirror and publishes no snapshot service, so an apt version pin
-becomes `E: Version '…' was not found` within weeks. The base-image digest is
-the right granularity for the Debian package set, and the identifier users
-actually consume is the published image digest in `build/image-pins.env`. The
-signing-key assertion is what makes this safe.
+**The `tor` apt package, by version.** Tor's version is fixed by the
+`TOR_IMAGE` digest: the runtime stage neither reinstalls nor upgrades the
+package, and a test enforces that (an `apt-get install tor` in a derived stage
+would quietly move to whatever the mirror serves on build day). An apt version
+pin on top would only rot — `deb.torproject.org` removes superseded versions
+from its mirror and publishes no snapshot service, so it becomes
+`E: Version '…' was not found` within weeks. The identifier users actually
+consume remains the published image digest in `build/image-pins.env`.
 
 **WordPress core, in practice.** The base image is pinned, but that does not
 freeze WordPress for users: `onionpress-security-audit.sh` runs on every
@@ -403,39 +447,37 @@ fixes what this image is *built* on; the running site patches itself.
 ### Bumping a pinned input
 
 Resolve the new **multi-arch index digest** — not a per-platform manifest
-digest, which resolves on amd64 and 404s on the arm64 builder:
+digest, which resolves on amd64 and 404s on the arm64 builder. No daemon
+needed; the script speaks the standard registry token flow, so it works for
+Docker Hub and for `containers.torproject.org` alike, and refuses a tag that
+resolves to a single-platform manifest:
 
 ```bash
-docker buildx imagetools inspect rust:1.99-trixie
+build/base-image-digest.sh containers.torproject.org/tpo/onion-services/onimages/tor:trixie
+build/base-image-digest.sh containers.torproject.org/tpo/onion-services/onimages/arti:trixie
+build/base-image-digest.sh docker:29.8.1-cli
 ```
 
-Without a daemon, the registry API works too:
+(`docker buildx imagetools inspect <tag>` reports the same digest when you
+have buildx.) Then edit the `ARG` default and rebuild. Coupling rules:
 
-```bash
-TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/rust:pull" \
-  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-curl -sI -H "Authorization: Bearer $TOKEN" \
-     -H "Accept: application/vnd.oci.image.index.v1+json" \
-     https://registry-1.docker.io/v2/library/rust/manifests/1.99-trixie \
-  | grep -i docker-content-digest
-```
-
-Then edit the `ARG` default and rebuild. Two coupling rules:
-
-- **`ARTI_VERSION` and `RUST_IMAGE` move together.** arti requires a minimum
-  Rust version; bumping one alone fails about twenty minutes into a
-  release-mode compile.
+- **`ARTI_IMAGE` and `ARTI_VERSION` move together.** The digest pins the
+  binary; `ARTI_VERSION` says what it is, and the build asserts the two agree
+  with `arti --version`. Upstream builds arti from the newest crate on their
+  build day with no version pin, so after bumping the digest find out what it
+  ships —
+  `docker run --rm --entrypoint arti <the new ARTI_IMAGE> --version` — and
+  set `ARTI_VERSION` to that. A mismatch fails the build in seconds, which is
+  the point: a new arti is a conscious step, not something found in a running
+  site.
+- **`TOR_IMAGE` and `ARTI_IMAGE` must be the same Debian release tag**
+  (`trixie` today). arti is linked dynamically against the base's libssl3 and
+  libsqlite3; the build's `arti --version` also proves the copied binary finds
+  its libraries. A test checks the tags match.
 - **`MKP224O_VERSION` must match `build/build-dmg-simple.sh`.** That script
   cross-compiles the same mkp224o release as a universal macOS binary. Two
   different versions minting vanity addresses for the same project is a
   difference nobody notices until the outputs differ. A test enforces this.
-
-Do **not** switch the Rust builder to a `-slim` variant. arti's default
-features resolve `default` → `default-runtime` → `native-tls` → `openssl-sys`,
-which needs `pkg-config` and `libssl-dev`; `rust:slim-trixie` ships only
-`ca-certificates`, `gcc` and `libc6-dev`. The full variant is
-`FROM buildpack-deps:trixie` and has them. The size difference is irrelevant —
-it is a builder stage, discarded once the arti binary is copied out.
 
 ---
 

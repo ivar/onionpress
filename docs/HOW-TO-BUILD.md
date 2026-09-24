@@ -31,7 +31,7 @@ make doctor        # tells you which tools below you have and which you lack
 
 | Artifact | Command | Host OS | Measured time |
 |---|---|---|---|
-| Container images (tor, wordpress) | `make images` | any with Docker | tor ≈ 4 min cold on 6 cores; wordpress ≈ 1 min |
+| Container images (tor, wordpress) | `make images` | any with Docker | tor under 1 min once its two Tor Project base images are pulled; wordpress ≈ 1 min |
 | Run the stack on those images | `make dev-up` | any with Docker | seconds |
 | macOS installer `onionpress.dmg` | `make dmg` | **macOS** | ≈ 4 min (first run downloads ≈ 200 MB) |
 | Linux package `onionpress.deb` | `make deb` | any | seconds |
@@ -40,9 +40,10 @@ make doctor        # tells you which tools below you have and which you lack
 | Unit tests | `make test-unit` | any | ≈ 30 s |
 
 Times are from the [verified configuration](#8-verified-configuration) below
-— an Apple Silicon Mac. Fewer or slower cores stretch the tor build; running
-it under CPU emulation (e.g. building arm64 on an Intel host) stretches it to
-hours.
+— an Apple Silicon Mac. The tor image no longer compiles arti (it comes
+prebuilt from the Tor Project's image), so only the small mkp224o compile
+scales with cores; running the build under CPU emulation (e.g. building arm64
+on an Intel host) still multiplies every step.
 
 ---
 
@@ -59,10 +60,12 @@ hours.
 
 ### Hardware
 
-- **RAM for the tor image**: the arti compile needs several GB available *to
-  the Docker daemon*. 8 GB was used for the verified build. **OnionPress's own
-  Colima VM is 1 GB by default and cannot build it** — use a separate daemon;
-  see [Building the tor image beside a running OnionPress](#building-the-tor-image-beside-a-running-onionpress).
+- **RAM for the tor image**: nothing heavy any more — arti comes prebuilt from
+  the Tor Project's image and only mkp224o is compiled. The verified build ran
+  in an 8 GB isolated Colima instance that had been sized for the old arti
+  compile; far less would do. Still build *beside*, not inside, OnionPress's
+  own 1 GB VM — it is your live site; see
+  [Building the tor image beside a running OnionPress](#building-the-tor-image-beside-a-running-onionpress).
 - **Disk**: about 2 GB for a DMG build (the assembled `OnionPress.app` is
   ≈ 370 MB, the DMG 160 MB, the download cache 290 MB); about 5 GB for the
   image builds and their base layers.
@@ -74,7 +77,7 @@ Builds are local but not hermetic — they fetch pinned inputs from upstream:
 
 | Build | Reaches |
 |---|---|
-| `make images` | Docker Hub (rust, debian, wordpress, docker base images), crates.io (arti), Debian and deb.torproject.org apt repos, GitHub (mkp224o, wp-cli) |
+| `make images` | containers.torproject.org (the Tor Project's tor and arti images), Docker Hub (wordpress, docker CLI base images), Debian and deb.torproject.org apt repos, GitHub (mkp224o, wp-cli) |
 | `make dmg` | GitHub releases (Colima, Lima, Docker Compose), download.docker.com, python.org/PyPI, libsodium.org |
 | `make deb`, `make extension`, `make icons` | nothing |
 
@@ -198,16 +201,16 @@ docker run --rm --entrypoint sh onionpress-tor:dev -c 'tor --version; arti --ver
 docker run --rm --entrypoint sh onionpress-wordpress:dev -c 'wp --info --allow-root | grep -i version; sha256sum /usr/local/bin/wp'
 ```
 
-Expected (as pinned in the Dockerfiles): Tor 0.4.9.x, Arti 2.6.0, Docker
-29.8.1, mkp224o v1.7.0; wp-cli 2.12.0 with the sha256 declared in
-`app/Resources/docker/wordpress/Dockerfile`.
+Expected (as pinned in the Dockerfiles): Tor 0.4.9.13 and Arti 2.6.0, both
+from the pinned Tor Project images, Docker 29.8.1, mkp224o v1.7.0; wp-cli
+2.12.0 with the sha256 declared in `app/Resources/docker/wordpress/Dockerfile`.
 
 #### Building the tor image beside a running OnionPress
 
-OnionPress's own Colima VM is 1 GB — not enough to compile arti — and it is
-your live site. Do not resize it. Run a second, isolated Colima instance under
-its own home using the binaries the app bundles; nothing under `~/.onionpress`
-is touched, and deleting the directory reclaims everything:
+OnionPress's own Colima VM is your live site. Do not build in it or resize
+it. Run a second, isolated Colima instance under its own home using the
+binaries the app bundles; nothing under `~/.onionpress` is touched, and
+deleting the directory reclaims everything:
 
 ```bash
 export PATH="/Applications/OnionPress.app/Contents/Resources/bin:$PATH"
@@ -217,8 +220,8 @@ export DOCKER_CONFIG="$COLIMA_HOME/docker-config"
 export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
 
 colima start --cpu 6 --memory 8 --disk 20    # first time: downloads a ~200 MB VM image
-build/build-images.sh tor                    # ≈ 4 min on 6 Apple Silicon cores
-colima stop                                  # frees the RAM; the layer cache stays (~4 GB)
+build/build-images.sh tor                    # under a minute once the base images are pulled
+colima stop                                  # frees the RAM; the layer cache stays
 # rm -rf ~/.colima-build                     # when you want the disk back
 ```
 
@@ -438,7 +441,7 @@ Every command in this document was run, and its output checked, on:
 | Python | 3.14.7 (Homebrew) for scripts and tests; `uv` 0.12.15 for the dev-grade DMG |
 | ImageMagick | 7.1.2 |
 | Docker | client 27.5.1 / server 27.4.0 (Colima 0.8.1), Compose 2.40.2 — classic builder, no buildx |
-| tor image | 3 min 52 s cold, isolated Colima 6 CPU / 8 GB |
+| tor image | 26 s after pulling the two Tor Project base images, isolated Colima 6 CPU / 8 GB |
 | DMG | 3 min 43 s, dev-grade |
 | `docker-publish.yml` | 8 min 50 s end to end in a fork, GitHub-hosted runners only (`ubuntu-24.04`, `ubuntu-24.04-arm`), cold cache, all three images amd64 + arm64 |
 

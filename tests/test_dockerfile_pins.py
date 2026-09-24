@@ -9,9 +9,18 @@ commit could ship a different compiler, a different arti and a different
 mkp224o — and because CI builds amd64 and arm64 on separate runners at
 different times, the two halves of one published manifest could disagree.
 
+Since Onimages 0.3.0 (2026-09-24) the tor image is built ON the Tor Project's
+own onion-service images from containers.torproject.org: their C Tor image is
+the runtime base and their arti image supplies the arti binary. The apt-key
+verification this file used to check therefore happens in the Tor Project's
+build, not ours; what this image asserts instead is that both images are
+pinned by digest and that the arti they deliver is the version and feature set
+the app needs.
+
 These are static checks on the Dockerfiles. They cannot prove an image builds;
-they prove the inputs are named immutably and that the two supply-chain
-assertions (the Tor apt key fingerprint, the wp-cli checksum) are still wired.
+they prove the inputs are named immutably and that the build-time assertions
+(arti version and onion-service feature, mkp224o commit, wp-cli checksum) are
+still wired.
 """
 
 import os
@@ -23,6 +32,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TOR_DOCKERFILE = "app/Resources/docker/tor/Dockerfile"
 WP_DOCKERFILE = "app/Resources/docker/wordpress/Dockerfile"
 STRESS_DOCKERFILE = "tests/stress/Dockerfile"
+
+# The Tor Project's onion-service images (the Onimages project), the only
+# place Tor and arti may come from.
+ONIMAGES = "containers.torproject.org/tpo/onion-services/onimages"
+ONIMAGES_TOR = ONIMAGES + "/tor"
+ONIMAGES_ARTI = ONIMAGES + "/arti"
 
 
 def _read(rel_path):
@@ -101,6 +116,59 @@ class TestBaseImagesArePinned(unittest.TestCase):
     def test_tor_dockerfile_bases_are_pinned(self):
         self._assert_all_from_pinned(TOR_DOCKERFILE)
 
+    def test_tor_runtime_is_the_tor_projects_image(self):
+        """The LAST FROM is the runtime base. It must be the Tor Project's own
+        C Tor image (Onimages), not a plain Debian with Tor installed on top:
+        that is where Tor, the deb.torproject.org apt source and its verified
+        keyring now come from.
+        """
+        refs = [ref for ref, _ in _from_refs(_read(TOR_DOCKERFILE))]
+        self.assertRegex(
+            refs[-1], r"^" + re.escape(ONIMAGES_TOR) + r":\S+@sha256:",
+            f"The tor image's runtime base must be {ONIMAGES_TOR}:<tag>@<digest>, "
+            f"got {refs[-1]!r}.",
+        )
+
+    def test_tor_runtime_resets_user_to_root(self):
+        """The Onimages base ends with USER debian-tor for its own ENTRYPOINT.
+        /entrypoint.sh has to start as root — it chowns the state volumes,
+        writes /etc/tor/torrc and drops privileges itself with su. Without
+        `USER root` after the final FROM, every chown fails and Tor never
+        starts, and nothing static short of this test notices.
+        """
+        text = _strip_comments(_read(TOR_DOCKERFILE))
+        last_from = max(m.start() for m in re.finditer(r"^FROM\s", text, re.M))
+        tail = text[last_from:]
+        self.assertRegex(
+            tail, re.compile(r"^USER root\s*$", re.M),
+            "The runtime stage must `USER root` right after its FROM.",
+        )
+        user_root_at = tail.index("USER root")
+        first_run_at = re.search(r"^RUN\s", tail, re.M).start()
+        self.assertLess(
+            user_root_at, first_run_at,
+            "`USER root` must come before the first RUN of the runtime stage.",
+        )
+        self.assertNotRegex(
+            tail[user_root_at:], re.compile(r"^USER\s+(?!root\b)", re.M),
+            "Nothing after `USER root` may switch the image's user again — "
+            "the entrypoint expects to start as root.",
+        )
+
+    def test_tor_runtime_clears_the_inherited_cmd(self):
+        """The base's CMD is a list of tor flags (--RunAsDaemon 0
+        --HiddenServiceDir …). Setting a new ENTRYPOINT does reset it, but say
+        so explicitly so a future edit cannot hand those flags to
+        /entrypoint.sh as arguments.
+        """
+        text = _strip_comments(_read(TOR_DOCKERFILE))
+        self.assertRegex(
+            text, re.compile(r'^ENTRYPOINT \["/entrypoint\.sh"\]\s*$', re.M))
+        self.assertRegex(
+            text, re.compile(r"^CMD \[\]\s*$", re.M),
+            "The runtime stage must end with an explicit empty `CMD []`.",
+        )
+
     def test_wordpress_dockerfile_bases_are_pinned(self):
         self._assert_all_from_pinned(WP_DOCKERFILE)
 
@@ -130,28 +198,87 @@ class TestBaseImagesArePinned(unittest.TestCase):
         self.assertRegex(text, r"FROM \$\{TOR_IMAGE\}")
 
 
-class TestArtiIsPinned(unittest.TestCase):
-    """`cargo install arti --locked` without --version is not pinned: --locked
-    applies the published crate's Cargo.lock to its dependency graph, but the
-    arti version itself is still resolved to newest-at-build-time.
+class TestArtiComesFromTheOfficialImage(unittest.TestCase):
+    """arti is copied out of the Tor Project's arti image, pinned by digest,
+    instead of compiled from crates.io. Upstream runs `cargo install arti`
+    with no --version — newest crate on their build day — so the digest is
+    what pins the binary, and the Dockerfile has to say which arti that is
+    and check it, or a digest bump could change the running Tor
+    implementation without anyone reading a version number.
     """
 
-    def test_cargo_install_has_an_explicit_version(self):
+    def test_arti_is_a_named_pinned_stage(self):
         text = _read(TOR_DOCKERFILE)
+        refs = dict((alias, ref) for ref, alias in _from_refs(text) if alias)
+        self.assertIn("arti", refs, "Expected a `FROM … AS arti` stage.")
         self.assertRegex(
-            text, r"ARG ARTI_VERSION=\d+\.\d+\.\d+",
-            "The tor Dockerfile must declare ARG ARTI_VERSION=X.Y.Z.",
+            refs["arti"], r"^" + re.escape(ONIMAGES_ARTI) + r":\S+@sha256:",
+            f"The arti stage must be {ONIMAGES_ARTI}:<tag>@<digest>, got "
+            f"{refs['arti']!r}.",
         )
         self.assertRegex(
-            text, r"cargo install arti .*--version",
-            "`cargo install arti` must pass --version; --locked alone pins "
-            "the dependency graph, not arti itself.",
+            _strip_comments(text),
+            re.compile(r"^COPY --from=arti /usr/local/bin/arti /usr/local/bin/arti\s*$", re.M),
+            "The runtime stage must copy /usr/local/bin/arti out of the arti "
+            "stage.",
+        )
+        self.assertNotIn(
+            "cargo install", _strip_comments(text),
+            "arti must not be compiled here any more; it comes from the "
+            "official image.",
         )
 
-    def test_keeps_the_features_the_app_needs(self):
+    def test_arti_version_is_declared_and_asserted(self):
         text = _read(TOR_DOCKERFILE)
-        self.assertIn("onion-service-service", text)
-        self.assertIn("static-sqlite", text)
+        self.assertRegex(
+            text, re.compile(r"^ARG ARTI_VERSION=\d+\.\d+\.\d+$", re.M),
+            "The tor Dockerfile must declare ARG ARTI_VERSION=X.Y.Z — the "
+            "one place the arti version is written down.",
+        )
+        code = _strip_comments(text)
+        self.assertIn(
+            "arti --version", code,
+            "The build must run `arti --version` on the copied binary...",
+        )
+        self.assertRegex(
+            code, r'!= "Arti \$\{ARTI_VERSION\}"',
+            "...and compare it against ARTI_VERSION, failing the build on "
+            "mismatch.",
+        )
+
+    def test_onion_service_feature_is_proven_at_build(self):
+        """`arti hss` exists only when arti was built with the
+        onion-service-service feature — what lets this image host a site
+        rather than only reach one. Upstream enables it today; if that
+        changes, the build must fail, not the site at first start.
+        """
+        code = _strip_comments(_read(TOR_DOCKERFILE))
+        self.assertRegex(
+            code, r"arti hss --help",
+            "The build must run `arti hss --help` to prove the copied arti "
+            "has onion-service support.",
+        )
+
+    def test_same_debian_release_on_both_sides(self):
+        """Upstream links arti dynamically against libssl3 and libsqlite3 (no
+        static-sqlite). The binary only runs if the runtime stage is the SAME
+        Debian release as the arti image, and installs sqlite3.
+        """
+        text = _read(TOR_DOCKERFILE)
+        refs = _from_refs(text)
+        stages = dict((alias, ref) for ref, alias in refs if alias)
+        runtime = refs[-1][0]
+        tag_of = lambda ref: ref.split("@", 1)[0].rsplit(":", 1)[1]
+        self.assertEqual(
+            tag_of(stages["arti"]), tag_of(runtime),
+            "The arti image and the tor runtime base must be the same Debian "
+            "release tag, or arti's shared libraries will not match.",
+        )
+        self.assertRegex(
+            _strip_comments(text).replace("\\\n", " "),
+            r"apt-get install[^\n]*\bsqlite3\b",
+            "The runtime stage must install sqlite3 (libsqlite3-0) for arti.",
+        )
 
 
 class TestMkp224oIsPinned(unittest.TestCase):
@@ -241,71 +368,53 @@ class TestWpCliIsVerified(unittest.TestCase):
         )
 
 
-class TestTorAptKeyIsVerified(unittest.TestCase):
-    """The signing key was fetched over HTTPS from a fingerprint-named URL with
-    nothing comparing the fetched key's actual fingerprint to that name. A
-    substituted key at that URL would have been installed and trusted.
+class TestTorComesFromTheOfficialImage(unittest.TestCase):
+    """Tor is whatever the pinned Onimages base carries. The Tor Project's own
+    build sets up deb.torproject.org and verifies the archive key's
+    fingerprint; this Dockerfile must not do either again, and must not
+    reinstall tor on top — that would silently move the Tor version off the
+    one the base digest names to whatever the mirror serves on build day.
     """
 
-    def test_fingerprint_is_asserted(self):
-        # Comment-stripped: the Dockerfile explains this check in prose that
-        # contains the very strings scanned for, so an unstripped scan would
-        # pass even if the check itself were replaced by `echo $EXPECTED`.
-        text = _strip_comments(_read(TOR_DOCKERFILE))
-        self.assertIn(
-            "gpg --show-keys", text,
-            "The Tor apt key's fingerprint must be re-derived from the "
-            "fetched bytes with `gpg --show-keys` and compared.",
+    def test_no_second_apt_source_or_key_fetch(self):
+        code = _strip_comments(_read(TOR_DOCKERFILE))
+        self.assertNotIn(
+            "deb.torproject.org", code,
+            "The Onimages base already configures deb.torproject.org with a "
+            "verified keyring. A second copy here would be an unverified "
+            "duplicate of that work.",
         )
-        self.assertIn(
-            '$1=="pub"', text,
-            "The check must compare EVERY primary key in the file, not just "
-            "the first fpr record. `gpg --dearmor` decodes the whole file into "
-            "the keyring and apt's signed-by= trusts any key in it, so "
-            "checking only the first fingerprint lets an attacker APPEND a "
-            "second key and have it trusted while the assertion still passes.",
-        )
-        self.assertIn(
-            "Tor apt signing key does not match expectations", text,
-            "A fingerprint mismatch must fail the build with a clear message.",
-        )
+        for needle in ("gpg --dearmor", "tor-archive-keyring", "TOR_APT_KEY_FPR"):
+            self.assertNotIn(
+                needle, code,
+                f"{needle!r}: the apt-key handling moved upstream into the "
+                "Tor Project's image build and must not come back here.",
+            )
 
-    def test_fingerprint_is_not_overridable(self):
-        """As an ARG it could be overridden with --build-arg, letting a
-        builder point the fetch and the assertion at the same substituted key
-        — a self-certifying check. It must be ENV or a literal.
-        """
-        text = _read(TOR_DOCKERFILE)
-        # re.M: these anchors are per-line within the Dockerfile, not
-        # whole-string.
-        self.assertIsNone(
-            re.search(r"^ARG\s+TOR_APT_KEY_FPR=", text, re.M),
-            "TOR_APT_KEY_FPR must not be an ARG — --build-arg would let the "
-            "fetch and the assertion be pointed at the same attacker key.",
-        )
-        self.assertIsNotNone(
-            re.search(r"^ENV TOR_APT_KEY_FPR=[0-9A-F]{40}$", text, re.M),
-            "TOR_APT_KEY_FPR must be an ENV with a full 40-hex fingerprint.",
-        )
-
-    def test_tor_package_is_deliberately_not_version_pinned(self):
-        """deb.torproject.org removes superseded versions from the mirror and
-        publishes no snapshot service, so an apt version pin becomes
-        `E: Version '…' was not found` within weeks. The base-image digest is
-        the right granularity, and the identifier users actually consume is
-        the published image digest in build/image-pins.env.
-        """
-        text = _strip_comments(_read(TOR_DOCKERFILE))
-        self.assertNotRegex(
-            text, r"install[^\n]*\btor=\d",
-            "The tor apt package must not be version-pinned — see the comment "
-            "in the Dockerfile.",
-        )
+    def test_tor_is_not_reinstalled(self):
+        code = _strip_comments(_read(TOR_DOCKERFILE)).replace("\\\n", " ")
+        for match in re.finditer(r"apt-get install\s+([^\n&]*)", code):
+            packages = set(re.sub(r"\s-[-\w]+", " ", match.group(1)).split())
+            with self.subTest(packages=sorted(packages)):
+                self.assertNotIn(
+                    "tor", packages,
+                    "`apt-get install tor` in a derived stage upgrades Tor to "
+                    "the mirror's current version and unpins it from the base "
+                    "digest. Tor comes from the base image.",
+                )
+                self.assertFalse(
+                    [p for p in packages if p.startswith("tor=")],
+                    "The tor apt package must not be version-pinned either — "
+                    "deb.torproject.org drops superseded versions within weeks.",
+                )
 
 
 class TestNoSilentlyFailingDownloads(unittest.TestCase):
     """`curl` without -f exits 0 on an HTTP error and writes the error body to
-    the output file. Both network fetches in these images had that bug.
+    the output file. Both network fetches in these images had that bug. The
+    tor Dockerfile's fetch (the apt key) moved upstream, so today only the
+    wordpress image downloads anything; the tor file is still scanned in case
+    a download comes back.
     """
 
     def test_all_curl_downloads_use_fail_flag(self):
@@ -324,11 +433,12 @@ class TestNoSilentlyFailingDownloads(unittest.TestCase):
                 r"(?:^|RUN\s+|&&\s*|\|\|\s*|;\s*|\|\s*)curl\s+(.*?)(?=\s+&&|\s*$)",
                 body, re.M,
             )
-            self.assertTrue(
-                invocations,
-                f"No curl invocation found in {dockerfile} — renamed or "
-                "removed? Update this test rather than passing vacuously.",
-            )
+            if dockerfile == WP_DOCKERFILE:
+                self.assertTrue(
+                    invocations,
+                    f"No curl invocation found in {dockerfile} — renamed or "
+                    "removed? Update this test rather than passing vacuously.",
+                )
             for args in invocations:
                 with self.subTest(dockerfile=dockerfile, args=args[:60]):
                     short = re.findall(r"(?:^|\s)-([A-Za-z]+)", args)

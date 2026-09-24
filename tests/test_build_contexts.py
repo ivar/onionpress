@@ -198,7 +198,8 @@ class TestBuildImagesScript(unittest.TestCase):
     def test_refuses_multiplatform_without_push(self):
         """Docker cannot --load a multi-platform build. Catching it up front
         matters more than usual here: the failure would otherwise land at the
-        end of a multi-hour emulated arti compile.
+        end of a QEMU-emulated build — hours back when the tor image compiled
+        arti from source, still minutes of wasted apt and mkp224o now.
         """
         script = _read("build/build-images.sh")
         self.assertIn("PLATFORM_COUNT", script)
@@ -334,7 +335,8 @@ class TestValidationWorkflow(unittest.TestCase):
         """`type=gha` needs ACTIONS_RUNTIME_TOKEN / ACTIONS_RESULTS_URL in the
         environment. docker/build-push-action injects them; a plain `run:`
         step does not, and without them --cache-from silently no-ops — every
-        PR would pay for a cold arti compile.
+        PR would pay for a cold build (a full arti compile, when this was
+        written; the mkp224o compile and base-image pulls today).
         """
         text = _read(self.WORKFLOW)
         self.assertIn(

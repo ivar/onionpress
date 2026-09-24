@@ -78,8 +78,9 @@ jobs:
           context: app/Resources/docker/tor
           platforms: linux/amd64
           push: true
-          # Always re-resolve FROM (wordpress:latest, rust/debian): without this a
-          # rebuild can silently reuse a cached base and ship an old WordPress.
+          # Always re-resolve FROM: the bases are digest-pinned, so this fetches
+          # exactly the pinned Onimages tor/arti images rather than whatever
+          # copy the runner cached under that name.
           pull: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_PREFIX }}onionpress-tor:build-amd64
           cache-from: type=gha,scope=tor-amd64
@@ -163,8 +164,9 @@ jobs:
           context: app/Resources/docker/wordpress
           platforms: linux/amd64
           push: true
-          # Always re-resolve FROM (wordpress:latest, rust/debian): without this a
-          # rebuild can silently reuse a cached base and ship an old WordPress.
+          # Always re-resolve FROM: the base is digest-pinned, so this fetches
+          # exactly the pinned wordpress image rather than whatever copy the
+          # runner cached under that name.
           pull: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ env.IMAGE_PREFIX }}onionpress-wordpress:build-amd64
           cache-from: type=gha,scope=wp-amd64

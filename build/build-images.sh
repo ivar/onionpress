@@ -37,10 +37,12 @@
 #   natively; cross-building amd64 needs QEMU (see --platform below).
 #
 # HOW LONG
-#   wordpress and stress-worker are seconds. The tor image compiles arti from
-#   source (`cargo install arti`) and is tens of minutes cold, even natively.
-#   Under QEMU emulation it is hours — which is exactly why CI splits the two
-#   architectures across two native runners instead of cross-building.
+#   wordpress and stress-worker are seconds. The tor image pulls the Tor
+#   Project's tor and arti images (about 400 MB together, once) and compiles
+#   only mkp224o — under a minute natively. It used to compile arti from
+#   crates.io and take tens of minutes; under QEMU emulation, hours — which is
+#   why CI still builds each architecture on its own native runner instead of
+#   cross-building.
 
 set -euo pipefail
 
@@ -69,7 +71,7 @@ GHCR_WP="ghcr.io/brewsterkahle/onionpress-wordpress"
 GHCR_STRESS="ghcr.io/brewsterkahle/onionpress-stress-worker"
 
 usage() {
-    sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 OPTIONS
@@ -83,9 +85,10 @@ OPTIONS
       --registry PREFIX  Registry prefix for --push, e.g.
                          ghcr.io/brewsterkahle
       --no-cache         Build without the layer cache.
-      --pull             Re-resolve base images even if cached. Correct for
-                         publish builds; skip it for iteration or every
-                         change to rust:latest triggers a fresh arti compile.
+      --pull             Re-resolve base images even if cached. Every base is
+                         pinned by digest, so this only re-fetches the same
+                         bytes; right for publish builds, needless for
+                         iteration.
       --cache-from SPEC  Passed through to buildx (CI uses type=gha,...).
       --cache-to SPEC    Passed through to buildx.
       --provenance VAL   Passed through to buildx (default: false).
@@ -147,16 +150,17 @@ ERROR: docker not found on PATH.
   Colima, Podman with a docker shim, or a remote DOCKER_HOST.
 
   OnionPress bundles its own docker CLI + Colima VM for running the app, at
-  /Applications/OnionPress.app/Contents/Resources/bin/. Those work for a
-  single-platform build (the bundle ships no buildx plugin, so this script
-  falls back to the classic builder), but the VM is sized for running the
-  stack, not for compiling arti:
+  /Applications/OnionPress.app/Contents/Resources/bin/. Those binaries work
+  for a single-platform build (the bundle ships no buildx plugin, so this
+  script falls back to the classic builder). Do not build inside the app's
+  own VM — it is your live site. Run an isolated instance with the same
+  binaries instead (docs/BUILDING.md has the details):
       export PATH="/Applications/OnionPress.app/Contents/Resources/bin:$PATH"
-      export COLIMA_HOME="$HOME/.onionpress/colima"
+      export COLIMA_HOME="$HOME/.colima-build"
       export LIMA_HOME="$COLIMA_HOME/_lima"
-      export DOCKER_CONFIG="$HOME/.onionpress/docker-config"
+      export DOCKER_CONFIG="$COLIMA_HOME/docker-config"
       export DOCKER_HOST="unix://$COLIMA_HOME/default/docker.sock"
-      colima start
+      colima start --disk 20
 EOF
     exit 1
 fi
@@ -213,9 +217,10 @@ ERROR: --platform lists $PLATFORM_COUNT platforms but --push was not given.
     * drop --platform to build natively for this host, or
     * add --push --registry <prefix> to publish a multi-arch manifest.
 
-  Note that cross-building the tor image is a QEMU-emulated Rust compile and
-  takes hours. CI avoids it entirely by building each architecture on its own
-  native runner and merging with 'buildx imagetools create'.
+  Note that cross-building runs the tor image's apt and mkp224o steps under
+  QEMU (hours, back when it compiled arti too). CI avoids it entirely by
+  building each architecture on its own native runner and merging with
+  'buildx imagetools create'.
 EOF
     exit 1
 fi
