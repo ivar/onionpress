@@ -113,6 +113,13 @@ FROM ${TOR_IMAGE}
 # volumes, writes /etc/tor/torrc, and drops privileges itself — su to
 # debian-tor for Tor, to arti for arti. Without this line every chown in the
 # entrypoint fails and Tor never starts.
+#
+# Numeric ids differ from the previous, debian:trixie-slim-based image
+# (debian-tor was 100:101 there and is 101:102 here; the arti user moves too).
+# Existing tor-state and arti-state volumes carry the old ids. That is fine
+# only because the entrypoint runs `chown -R` on both trees at every start
+# — keep that, and never chown a volume by number from the host side and
+# expect it to stay right.
 USER root
 
 # The base sets WORKDIR /etc/tor. Every path in the scripts is absolute, but
