@@ -28,7 +28,6 @@ DEFAULTS = {
     "VM_CPU": "2",
     "CLOUDFLARE_TUNNEL_TOKEN": "",
     "REGISTER_WITH_ONIONHEAVEN": "yes",
-    "TOR_IMPL": "tor",
     "ONIONHEAVEN_ADDRESS": "",
     "ONIONHEAVEN_MAX_SERVICES": "10",
     "SHARE_ANALYTICS_WITH_ONIONHOME": "no",
@@ -41,7 +40,7 @@ DEFAULTS = {
 # future credential-bearing key can't leak by simply being added to config.
 # CLOUDFLARE_TUNNEL_TOKEN is the notable exclusion — it's a secret.
 SAFE_CONFIG_KEYS = frozenset({
-    "TOR_IMPL", "ADDRESS_PREFIX",
+    "ADDRESS_PREFIX",
     "VM_MEMORY", "VM_CPU", "VM_DISK",
     "INSTALL_IA_PLUGIN", "UPDATE_ON_LAUNCH", "LAUNCH_ON_LOGIN", "PREVENT_SLEEP",
     "REGISTER_WITH_ONIONHEAVEN", "ONIONHEAVEN_ADDRESS", "ONIONHEAVEN_MAX_SERVICES",

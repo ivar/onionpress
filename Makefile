@@ -34,9 +34,9 @@ images:
 	./build/build-images.sh
 
 # Multi-arch requires --push, because Docker cannot load a multi-platform
-# result into the local image store. Cross-building the tor image is a
-# QEMU-emulated Rust compile and takes hours — CI does it on two native
-# runners instead. Set REGISTRY to your own namespace.
+# result into the local image store. Cross-building the tor image runs its
+# apt and mkp224o steps under QEMU (hours back when it also compiled arti) —
+# CI builds on two native runners instead. Set REGISTRY to your own namespace.
 images-multiarch:
 	@if [ -z "$(REGISTRY)" ]; then \
 		echo "ERROR: set REGISTRY, e.g. make images-multiarch REGISTRY=ghcr.io/you"; \

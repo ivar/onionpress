@@ -424,7 +424,7 @@ class OnionPressApp(rumps.App):
         self._yellow_since = None          # Timestamp when entered yellow state
         self._last_check_complete_ts = time.time()  # Last time check_status finished a full pass
         self._was_ready = False            # Were we ever ready this session?
-        self._tor_internally_ready = False # Checks 1-4 passed (Arti+WordPress up)
+        self._tor_internally_ready = False # Checks 1-4 passed (Tor+WordPress up)
         # Reclaim fields kept for compatibility (notify_onionheaven_online still sets them)
         self._onionheaven_reclaim_succeeded = False
         self._onionheaven_reclaim_in_flight = False
@@ -1848,7 +1848,7 @@ class OnionPressApp(rumps.App):
 
                         # Auto-restart tor if stuck for 2+ minutes AND
                         # the container shows signs of actual trouble (broken
-                        # guards, circuit failures). If Arti is healthy but
+                        # guards, circuit failures). If Tor is healthy but
                         # just waiting for descriptor propagation, don't restart
                         # — that would reset progress.
                         # Uses cooldown (5 min) so we can retry if the spiral recurs.
@@ -3012,7 +3012,7 @@ class OnionPressApp(rumps.App):
         screen) and never changed on the fly. The old behaviour — detect a
         config ADDRESS_PREFIX that no longer matched the live address and
         regenerate the onion identity on startup — was removed (#256 phase
-        4b): it shared the churny stop -> delete arti-state -> regenerate
+        4b): it shared the churny stop -> delete key volume -> regenerate
         path and risked clobbering the address. Kept as a stub so the
         startup/restart call sites are unchanged; always proceeds."""
         return True
@@ -4071,7 +4071,7 @@ class OnionPressApp(rumps.App):
                 # install-from-backup: delegate to the launcher's `restore`,
                 # which now tears down + rebuilds the install directly from the
                 # backup (seeded key + imported DB/content) — no in-place
-                # overwrite and no .import-key-pending arti-state key-swap churn.
+                # overwrite and no .import-key-pending key-volume swap churn.
                 log_and_update("Rebuilding from backup (install-from-backup)…")
                 r = subprocess.run(
                     [self.launcher_script, "restore", password, zip_path],
@@ -4862,7 +4862,7 @@ License: AGPL v3"""
                 'version': self.version,
                 'onion_address': onion_addr,
                 'onionname': self._read_config_value("ONIONNAME", ""),
-                'tor_impl': self._read_config_value("TOR_IMPL", "tor"),
+                'tor_impl': 'tor',  # the only implementation since 2026-09-24; kept for the OnionHome schema
                 'uptime_seconds': uptime_seconds,
                 'bootstrap_pct': bootstrap_pct,
                 'containers': containers,
@@ -5163,7 +5163,7 @@ License: AGPL v3"""
                 # On-the-fly vanity regeneration was removed (#256 phase 4b):
                 # the address is fixed at install (chosen on the welcome screen)
                 # and only changes via restore-from-backup. This used the churny
-                # stop -> delete arti-state -> regen path that risked clobbering
+                # stop -> delete key volume -> regen path that risked clobbering
                 # the address; it is now a no-op that reports back to the page.
                 self.log("Settings page: generate-vanity requested but disabled "
                          "(prefix is fixed at install) — ignoring")

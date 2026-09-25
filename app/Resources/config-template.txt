@@ -151,17 +151,3 @@ SHARE_ANALYTICS_WITH_ONIONHOME=no
 # ONIONPRESS_TOR_IMAGE=onionpress-tor:dev
 # ONIONPRESS_WORDPRESS_IMAGE=onionpress-wordpress:dev
 
-# Tor Implementation
-# Default: "tor" (Classic C Tor)
-#
-# Choose which Tor implementation to use for onion services:
-#
-#   tor   - Classic C Tor (default). Faster onion service releases (sends
-#           DESTROY cells to intro relays), available via apt-get.
-#   arti  - Tor Project's modern Rust implementation. Native arm64
-#           on Apple Silicon, but lacks intro circuit teardown on release.
-#
-# Keys are automatically converted between formats when switching.
-# Requires restart to take effect.
-#
-TOR_IMPL=tor

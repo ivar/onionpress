@@ -8,9 +8,9 @@ name: Build container images (validation)
 # no way to find out at all.
 #
 # Deliberately build-only:
-#   * amd64 only. Cross-building arm64 here means a QEMU-emulated arti compile
-#     (hours). Architecture parity is docker-publish.yml's job, on two native
-#     runners.
+#   * amd64 only. Cross-building arm64 here means QEMU emulation (hours back
+#     when the tor image compiled arti; still slow). Architecture parity is
+#     docker-publish.yml's job, on two native runners.
 #   * Never pushes. This runs on pull_request, so a fork PR executes
 #     contributor code — that must stay on a disposable GitHub-hosted runner
 #     with a read-only token.
@@ -35,9 +35,10 @@ permissions:
   contents: read
 
 jobs:
-  # Which contexts actually changed. The tor image is a full Rust compile, so
-  # it is only rebuilt when something under its context moved — a docs-only or
-  # wordpress-only PR should not pay for it.
+  # Which contexts actually changed. The tor image pulls the Tor Project's
+  # base image and compiles mkp224o, so it is only rebuilt when something
+  # under its context moved — a docs-only or wordpress-only PR should not pay
+  # for it.
   changes:
     name: Detect changed contexts
     runs-on: ubuntu-latest
@@ -94,8 +95,7 @@ jobs:
       # The gha cache backend needs ACTIONS_RUNTIME_TOKEN and
       # ACTIONS_RESULTS_URL in the environment. docker/build-push-action
       # injects them; a plain `run:` step does not, and without them
-      # --cache-from silently no-ops and every build starts cold — which for
-      # the tor image means a full arti compile on every PR.
+      # --cache-from silently no-ops and every build starts cold on every PR.
       - uses: crazy-max/ghaction-github-runtime@v3
         if: matrix.enabled == 'true'
 
@@ -103,8 +103,9 @@ jobs:
         if: matrix.enabled == 'true'
         # Read the release scope so a PR starts warm; write to a PR-specific
         # scope with mode=min so it cannot evict what docker-publish.yml needs.
-        # No --pull: re-resolving rust:latest on every PR would force a cold
-        # arti rebuild for reasons unrelated to the change under review.
+        # No --pull: every base is pinned by digest, so there is nothing to
+        # re-resolve, and it would only discard the cache for reasons
+        # unrelated to the change under review.
         run: |
           build/build-images.sh "${{ matrix.target }}" \
             --platform linux/amd64 \

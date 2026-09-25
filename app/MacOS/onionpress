@@ -235,17 +235,6 @@ if [ -f "$DATA_DIR/config" ]; then
 fi
 export CLOUDFLARE_TUNNEL_TOKEN
 
-# Tor implementation: "tor" (C Tor, default) or "arti"
-# Read from config file, default to C Tor
-TOR_IMPL="tor"
-if [ -f "$DATA_DIR/config" ]; then
-    _tor_impl=$(grep "^TOR_IMPL=" "$DATA_DIR/config" | cut -d= -f2)
-    if [ "$_tor_impl" = "tor" ] || [ "$_tor_impl" = "arti" ]; then
-        TOR_IMPL="$_tor_impl"
-    fi
-fi
-export TOR_IMPL
-
 # Locally built container images (development).
 #
 # build/build-images.sh builds the tor and wordpress images from this repo and
@@ -307,7 +296,7 @@ else
 fi
 
 # OnionHeaven farm — takeover worker containers
-# Each gets its own Arti instance (own guard pool) to prevent circuit exhaustion.
+# Each gets its own Tor instance (own guard pool) to prevent circuit exhaustion.
 # Starts with 2, scales up by 2 when threshold is hit.
 # The farm monitor and workers are managed by the onionheaven container itself
 # via farm_scale_requests in the registry DB.
@@ -317,7 +306,6 @@ ONIONHEAVEN_FARM_MONITOR_PID=""
 _start_takeover_worker() {
     local idx="$1"
     local name="onionheaven-takeover-${idx}"
-    local vol="onionpress-arti-state-takeover-${idx}"
 
     docker rm -f "$name" >> "$LOG_FILE" 2>&1 || true
 
@@ -328,11 +316,9 @@ _start_takeover_worker() {
         --log-opt max-size=10m \
         --log-opt max-file=3 \
         -e TZ="${TZ:-UTC}" \
-        -e TOR_IMPL="${TOR_IMPL:-tor}" \
         -e TAKEOVER_WORKER=1 \
         -e CONTAINER_NAME="$name" \
         -e MAX_TAKEOVER_SERVICES="${ONIONHEAVEN_MAX_SERVICES:-10}" \
-        -v "${vol}:/var/lib/arti/" \
         -v "onionpress-persistent-data:/var/lib/onionpress" \
         --restart unless-stopped \
         "${ONIONHEAVEN_IMAGE:-${ONIONPRESS_TOR_IMAGE:-ghcr.io/brewsterkahle/onionpress-tor:latest@sha256:1f98ac29337bf9d5da41a80d865d04e21934eb8deba2a86009b8a69c0a4f6e7c}}" >> "$LOG_FILE" 2>&1; then
@@ -609,8 +595,9 @@ detect_container_runtime() {
     return 1
 }
 
-# Ensure both C Tor and Arti key formats exist in a directory.
-# Derives whichever is missing from whichever is present.
+# Ensure both key formats exist in a directory: C Tor's key files and the
+# OpenSSH PEM (ks_hs_id.ed25519_expanded_private) that the container and
+# OnionHeaven take. Derives whichever is missing from whichever is present.
 ensure_key_formats() {
     local dir="$1"
     bundled_python "$SCRIPTS_DIR/key_manager.py" ensure-formats "$dir" >> "$LOG_FILE" 2>&1
@@ -681,7 +668,7 @@ generate_vanity_address() {
     VANITY_ADDRESS=$(basename "$VANITY_DIR")
     log "Generated custom address: $VANITY_ADDRESS" >&2
 
-    # Ensure both key formats exist (mkp224o generates C Tor format, derive Arti PEM)
+    # Ensure both key formats exist (mkp224o generates C Tor format, derive the PEM)
     if ! ensure_key_formats "$VANITY_DIR"; then
         log "ERROR: ensure_key_formats failed for $VANITY_DIR" >&2
         return 1
@@ -733,7 +720,7 @@ WHAT THIS COMMAND DOES:
   1. Decodes the base32 key and validates it is exactly 64 bytes
   2. Derives the .onion address from the public key portion
   3. Writes key files to ~/.onionpress/shared/vanity-keys/<address>/
-     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM format for Arti)
+     - ks_hs_id.ed25519_expanded_private  (OpenSSH PEM, the format the container takes)
      - hostname                           (the .onion address)
   4. On next start, OnionPress will use this key
 
@@ -763,8 +750,10 @@ HELPEOF
         return 0
     fi
 
-    # Check if arti-state volume already exists (need to replace old key)
-    if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^onionpress-arti-state$'; then
+    # Check if a key volume already exists (need to replace old key). The old
+    # name is checked too: an install that never started on this version has
+    # not migrated yet.
+    if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx 'onionpress-onion-keys\|onionpress-arti-state'; then
         echo "An onion address key already exists."
         echo ""
         if [ -n "$current_addr" ]; then
@@ -784,18 +773,21 @@ HELPEOF
         # Stop OnionPress if running
         echo "Stopping OnionPress..."
         stop_containers 2>/dev/null
-        # Remove old arti-state volume (must verify it's actually gone)
-        echo "Removing old arti-state volume..."
-        docker volume rm onionpress-arti-state >> "$LOG_FILE" 2>&1 || true
-        if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^onionpress-arti-state$'; then
-            echo "Volume still in use — force-removing containers..."
-            docker rm -f $(docker ps -aq --filter volume=onionpress-arti-state) >> "$LOG_FILE" 2>&1 || true
-            docker volume rm onionpress-arti-state >> "$LOG_FILE" 2>&1 || true
-            if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -q '^onionpress-arti-state$'; then
-                echo "ERROR: Could not remove old arti-state volume. Is another Docker client using it?" >&2
-                return 1
+        # Remove the old key volume (must verify it's actually gone); the
+        # pre-2026-09-25 name goes too so it cannot be migrated back later.
+        echo "Removing old key volume..."
+        for vol in onionpress-onion-keys onionpress-arti-state; do
+            docker volume rm "$vol" >> "$LOG_FILE" 2>&1 || true
+            if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "$vol"; then
+                echo "Volume still in use — force-removing containers..."
+                docker rm -f $(docker ps -aq --filter "volume=$vol") >> "$LOG_FILE" 2>&1 || true
+                docker volume rm "$vol" >> "$LOG_FILE" 2>&1 || true
+                if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "$vol"; then
+                    echo "ERROR: Could not remove old $vol volume. Is another Docker client using it?" >&2
+                    return 1
+                fi
             fi
-        fi
+        done
         # Also remove old tor-keys volume if it exists (migration leftover)
         docker volume rm onionpress-tor-keys >> "$LOG_FILE" 2>&1 || true
         # Remove old vanity-keys directory
@@ -806,11 +798,11 @@ HELPEOF
         rm -rf "$DATA_DIR/shared/vanity-keys/"
     fi
 
-    # Mark that a key was imported so next startup removes the old arti-state volume
+    # Mark that a key was imported so next startup removes the old key volume
     # (needed when Docker isn't running and we can't remove the volume now)
     touch "$DATA_DIR/.import-key-pending"
 
-    # Write all key files (Arti PEM + C Tor + hostname)
+    # Write all key files (PEM + C Tor + hostname)
     if ! bundled_python "$SCRIPTS_DIR/key_manager.py" import-key "$key_b32" "$DATA_DIR/shared/vanity-keys" 2>>"$LOG_FILE"; then
         echo "ERROR: Failed to write key files" >&2
         return 1
@@ -1202,6 +1194,55 @@ configure_site_timezones() {
 # Function to set up OnionHeaven (onionheaven mode only)
 # Registration API now runs in the onionheaven container (web-server.py),
 # which creates its own data directories on the shared volume at startup.
+# One-time migration of the onion service key volume from its historical
+# name. Until 2026-09-25 the delivered PEM lived in onionpress-arti-state at
+# state/keystore/hss/<name>/ (arti's keystore layout); it now lives in
+# onionpress-onion-keys at <name>/. This runs before the first-run check,
+# which keys off the NEW volume's existence — without it an upgraded install
+# would look like a fresh one and mint a new address. For the same reason it
+# refuses to let the start continue when the copy fails: the old volume is
+# left untouched and the next start retries. Kept identical in the macOS and
+# Linux launchers; a test enforces that.
+migrate_key_volume() {
+    if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "onionpress-onion-keys"; then
+        return 0
+    fi
+    if ! docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "onionpress-arti-state"; then
+        return 0   # nothing to migrate: a fresh install, or one that never had a key volume
+    fi
+    log "Migrating the onion service key volume: onionpress-arti-state -> onionpress-onion-keys"
+    if ! docker volume create onionpress-onion-keys >> "$LOG_FILE" 2>&1; then
+        log "ERROR: could not create onionpress-onion-keys; not starting (the old key volume is untouched)"
+        return 1
+    fi
+    if ! docker run --rm \
+        -v onionpress-arti-state:/old:ro \
+        -v onionpress-onion-keys:/new \
+        alpine sh -c '
+            set -e
+            if [ -d /old/state/keystore/hss ]; then
+                cp -a /old/state/keystore/hss/. /new/
+            fi
+            chmod 700 /new
+            find /new -mindepth 1 -type d -exec chmod 700 {} +
+            find /new -type f -exec chmod 600 {} +
+            for n in $(ls /old/state/keystore/hss 2>/dev/null); do
+                if [ -f "/old/state/keystore/hss/$n/ks_hs_id.ed25519_expanded_private" ] \
+                   && ! cmp -s "/old/state/keystore/hss/$n/ks_hs_id.ed25519_expanded_private" \
+                              "/new/$n/ks_hs_id.ed25519_expanded_private"; then
+                    echo "key for $n did not copy intact" >&2
+                    exit 1
+                fi
+            done
+        ' >> "$LOG_FILE" 2>&1; then
+        docker volume rm onionpress-onion-keys >> "$LOG_FILE" 2>&1 || true
+        log "ERROR: key volume migration failed; not starting so the old key volume stays intact (see $LOG_FILE)"
+        return 1
+    fi
+    log "Key volume migrated; onionpress-arti-state is kept as a fallback until uninstall sweeps it"
+    return 0
+}
+
 # Function to start containers
 start_containers() {
     log "Starting OnionPress containers..."
@@ -1210,12 +1251,14 @@ start_containers() {
 
     # Handle pending key import (volume couldn't be removed when Docker wasn't running)
     if [ -f "$DATA_DIR/.import-key-pending" ]; then
-        log "Pending key import detected — removing old arti-state and tor-state volumes..."
-        # Both keystores must be wiped: arti-state holds the Arti key, tor-state
-        # holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The entrypoint
-        # only converts Arti→C Tor when CTOR_SECRET is missing, so a stale
-        # tor-state would silently override the imported identity.
-        for vol in onionpress-arti-state onionpress-tor-state; do
+        log "Pending key import detected — removing old key and tor-state volumes..."
+        # Both keystores must be wiped: onion-keys holds the delivered PEM key,
+        # tor-state holds C Tor's /var/lib/tor/hidden_service/<name>/ pair. The
+        # entrypoint only converts PEM→C Tor when CTOR_SECRET is missing, so a
+        # stale tor-state would silently override the imported identity. The
+        # pre-2026-09-25 volume name goes too, or the migration below would
+        # bring the replaced identity back.
+        for vol in onionpress-onion-keys onionpress-arti-state onionpress-tor-state; do
             docker volume rm "$vol" >> "$LOG_FILE" 2>&1 || true
             if docker volume ls --format '{{.Name}}' 2>/dev/null | grep -qx "$vol"; then
                 log "Volume $vol still in use — force-removing containers using it..."
@@ -1231,9 +1274,16 @@ start_containers() {
         rm -f "$DATA_DIR/.import-key-pending"
     fi
 
-    # Check if this is first run (no arti-state volume exists)
-    # Use --format + exact grep to avoid matching onionpress-arti-state-client
-    if ! docker volume ls --format '{{.Name}}' | grep -qx "onionpress-arti-state"; then
+    # Upgraded installs: bring the key volume over from its old name before
+    # the first-run check below looks for the new one.
+    if ! migrate_key_volume; then
+        log "ERROR: cannot start without the onion service key volume"
+        return 1
+    fi
+
+    # Check if this is first run (no key volume exists)
+    # Use --format + exact grep to avoid matching similarly named volumes
+    if ! docker volume ls --format '{{.Name}}' | grep -qx "onionpress-onion-keys"; then
         log "First run detected - generating custom onion address..."
 
         # Read address prefix from config, default to "op2"
@@ -1308,20 +1358,21 @@ start_containers() {
         fi
 
         if [ -n "$VANITY_DIR" ]; then
-            # Create arti-state volume and install OpenSSH key to Arti keystore path
-            if ! docker volume create onionpress-arti-state >> "$LOG_FILE" 2>&1; then
-                log "ERROR: Failed to create arti-state volume"
+            # Create the key volume and install the PEM where the entrypoint
+            # looks for it (<name>/ks_hs_id.ed25519_expanded_private, read as root)
+            if ! docker volume create onionpress-onion-keys >> "$LOG_FILE" 2>&1; then
+                log "ERROR: Failed to create the onionpress-onion-keys volume"
                 return 1
             fi
             if ! docker run --rm \
-                -v onionpress-arti-state:/dest \
+                -v onionpress-onion-keys:/dest \
                 --mount type=bind,source="$VANITY_DIR",target=/src \
-                alpine sh -c 'mkdir -p /dest/state/keystore/hss/wordpress && cp /src/ks_hs_id.ed25519_expanded_private /dest/state/keystore/hss/wordpress/ && chown -R 100:100 /dest/state && chmod 700 /dest/state /dest/state/keystore /dest/state/keystore/hss /dest/state/keystore/hss/wordpress && chmod 600 /dest/state/keystore/hss/wordpress/*' >> "$LOG_FILE" 2>&1; then
-                log "ERROR: Failed to copy address key to arti-state volume"
+                alpine sh -c 'mkdir -p /dest/wordpress && cp /src/ks_hs_id.ed25519_expanded_private /dest/wordpress/ && chown -R 0:0 /dest && chmod 700 /dest /dest/wordpress && chmod 600 /dest/wordpress/*' >> "$LOG_FILE" 2>&1; then
+                log "ERROR: Failed to copy address key to the onionpress-onion-keys volume"
                 return 1
             fi
 
-            log "Address key installed to arti-state volume"
+            log "Address key installed to the onionpress-onion-keys volume"
             log "Onion address: $(cat "$VANITY_DIR/hostname" 2>/dev/null || basename "$VANITY_DIR")"
         else
             # Vanity generation failed. Continue with a random address so
@@ -1336,7 +1387,7 @@ start_containers() {
         # Not first run. The vanity prefix is fixed at install (#256 phase 4b)
         # — the old "config ADDRESS_PREFIX changed -> regenerate the onion
         # identity on startup" path was removed: it shared the churny
-        # compose-down + delete-arti-state + regenerate flow and risked
+        # compose-down + delete-key-volume + regenerate flow and risked
         # clobbering the address. Nothing to do here.
         :
     fi
@@ -1947,8 +1998,8 @@ restore_backup() {
     onion_address=$(bundled_python -c "import json, sys; print(json.load(open(sys.argv[1])).get('onion_address',''))" "$staging/metadata.json" 2>/dev/null || echo "")
     log "Restore: backup from $onion_address"
 
-    # 1. Restore Tor keys — accept either C Tor or Arti format.
-    #    Mac uses Arti only; if backup has only C Tor keys, convert to Arti PEM.
+    # 1. Restore Tor keys — accept either C Tor or PEM format.
+    #    The container takes the PEM; if the backup has only C Tor keys, derive it.
     local ctor_secret="$staging/tor-keys/hs_ed25519_secret_key"
     local ctor_public="$staging/tor-keys/hs_ed25519_public_key"
     local arti_key="$staging/tor-keys/ks_hs_id.ed25519_expanded_private"
@@ -2352,9 +2403,9 @@ main() {
             setup_wordpress_cli "$@"
             if [ -n "$has_from_backup" ]; then
                 # --from-backup restored keys to vanity-keys/ — need to reinstall
-                # into the arti-state volume so Tor uses the restored address.
+                # into the key volume so Tor uses the restored address.
                 # Use .import-key-pending flag so start_containers removes the old
-                # arti-state volume and installs the restored key.
+                # key volume and installs the restored key.
                 log "Setup --from-backup: flagging key reimport..."
                 touch "$DATA_DIR/.import-key-pending"
                 stop_containers
@@ -2408,7 +2459,7 @@ main() {
             fi
             # install-from-backup: the Python CLI tears the install down and
             # rebuilds it from the backup (seeded key + imported DB/content),
-            # replacing the old in-place overwrite + arti-state key-swap churn
+            # replacing the old in-place overwrite + key-volume swap churn
             # (no .import-key-pending, no manual multisite/Tor dance).
             bundled_python -m onionpress.cli restore "$restore_pass" "$restore_path"
             echo "Done! OnionPress rebuilt from backup."
@@ -2526,7 +2577,7 @@ main() {
             setup_db_passwords
             # cli restore tears down (already reset above) and rebuilds the
             # install directly from the backup — seeded key + imported DB/
-            # content, no in-place overwrite or arti-state key-swap churn.
+            # content, no in-place overwrite or key-volume swap churn.
             bundled_python -m onionpress.cli restore "$scrub_pass" "$scrub_backup"
             echo "  Restore and restart complete."
 
