@@ -207,15 +207,19 @@ class OnionPressCLI:
             # the seeded key and imported backup cleanly (no stale keystore
             # overriding the restored identity, no in-place overwrite).
             self.containers.stop()
-            for vol in ("onionpress-arti-state", "onionpress-tor-state",
+            # onionpress-arti-state is the key volume's pre-2026-09-25 name;
+            # wiping it too keeps the launcher's migration from bringing the
+            # replaced identity back.
+            for vol in ("onionpress-onion-keys", "onionpress-arti-state",
+                        "onionpress-tor-state",
                         "onionpress-db-data", "onionpress-wordpress-data",
                         "onionpress-persistent-data"):
                 self.docker.run(["volume", "rm", vol], timeout=20)
                 self.log(f"Removed volume: {vol}")
 
-            # Seed the fresh arti-state keystore from the backup key so Tor serves
-            # the restored identity on first start (the C-Tor entrypoint converts
-            # arti->ctor when tor-state is empty). Mirrors the launcher's
+            # Seed the fresh key volume from the backup key so Tor serves the
+            # restored identity on first start (the entrypoint converts the PEM
+            # to C Tor's key files when tor-state is empty). Mirrors the launcher's
             # first-run key install. Bind-mount the host vanity-keys dir, which
             # seed_onion_key_for_install wrote under shared/ (inside the Colima
             # mount, so the bind works on macOS as well as Linux).
@@ -224,19 +228,17 @@ class OnionPressCLI:
                 self.paths.data_dir, "shared", "vanity-keys", addr)
             seed = self.docker.run([
                 "run", "--rm",
-                "-v", "onionpress-arti-state:/dest",
+                "-v", "onionpress-onion-keys:/dest",
                 "--mount", f"type=bind,source={vanity_addr_dir},target=/src,readonly",
                 "alpine", "sh", "-c",
-                "mkdir -p /dest/state/keystore/hss/wordpress && "
-                "cp /src/ks_hs_id.ed25519_expanded_private "
-                "/dest/state/keystore/hss/wordpress/ && "
-                "chown -R 100:100 /dest/state && "
-                "chmod 700 /dest/state /dest/state/keystore "
-                "/dest/state/keystore/hss /dest/state/keystore/hss/wordpress && "
-                "chmod 600 /dest/state/keystore/hss/wordpress/*",
+                "mkdir -p /dest/wordpress && "
+                "cp /src/ks_hs_id.ed25519_expanded_private /dest/wordpress/ && "
+                "chown -R 0:0 /dest && "
+                "chmod 700 /dest /dest/wordpress && "
+                "chmod 600 /dest/wordpress/*",
             ], timeout=30)
             if not seed.ok:
-                self.log("Restore: WARNING — arti-state key seed reported a "
+                self.log("Restore: WARNING — key volume seed reported a "
                          "problem; Tor may not adopt the restored identity")
 
             # Rebuild: fresh containers adopt the seeded key; import the backup

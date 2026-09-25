@@ -3,13 +3,12 @@
 # Creates state directories, starts the helper services, launches Tor, and
 # writes the hostname files that the launchers and scripts read.
 #
-# /var/lib/arti is the identity keystore volume. The name is historical
-# (arti was the implementation until 2026-09-24) but the path is load-bearing:
+# /var/lib/onionpress-keys is the identity volume (onionpress-onion-keys):
 # the launchers install the onion service key there on first run and on key
-# import/restore, as an OpenSSH PEM (ks_hs_id.ed25519_expanded_private), and
-# this script converts it to C Tor's key files whenever those are missing. On
-# macOS it is the only route by which the key reaches the container.
-ARTI_KEYSTORE="/var/lib/arti/state/keystore/hss"
+# import/restore, as an OpenSSH PEM at <name>/ks_hs_id.ed25519_expanded_private,
+# and this script converts it to C Tor's key files whenever those are missing.
+# On macOS it is the only route by which the key reaches the container.
+KEYS_DIR="/var/lib/onionpress-keys"
 
 # Write a minimal torrc for the SOCKS + control-port modes below.
 write_client_torrc() {
@@ -227,12 +226,12 @@ chmod 700 /var/lib/tor
 # Convert the delivered PEM key to C Tor's key files when those are missing
 # (first run, key import, restore, or an install that last ran on arti).
 for nickname in wordpress healthcheck; do
-    ARTI_KEY="${ARTI_KEYSTORE}/${nickname}/ks_hs_id.ed25519_expanded_private"
+    PEM_KEY="${KEYS_DIR}/${nickname}/ks_hs_id.ed25519_expanded_private"
     CTOR_DIR="/var/lib/tor/hidden_service/${nickname}"
     CTOR_SECRET="${CTOR_DIR}/hs_ed25519_secret_key"
-    if [ -f "$ARTI_KEY" ] && [ ! -f "$CTOR_SECRET" ]; then
+    if [ -f "$PEM_KEY" ] && [ ! -f "$CTOR_SECRET" ]; then
         echo "Converting delivered key for $nickname to C Tor format..."
-        python3 /key-convert.py arti-to-ctor "$ARTI_KEY" "$CTOR_DIR"
+        python3 /key-convert.py arti-to-ctor "$PEM_KEY" "$CTOR_DIR"
     fi
 done
 

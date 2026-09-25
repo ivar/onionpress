@@ -3012,7 +3012,7 @@ class OnionPressApp(rumps.App):
         screen) and never changed on the fly. The old behaviour — detect a
         config ADDRESS_PREFIX that no longer matched the live address and
         regenerate the onion identity on startup — was removed (#256 phase
-        4b): it shared the churny stop -> delete arti-state -> regenerate
+        4b): it shared the churny stop -> delete key volume -> regenerate
         path and risked clobbering the address. Kept as a stub so the
         startup/restart call sites are unchanged; always proceeds."""
         return True
@@ -4071,7 +4071,7 @@ class OnionPressApp(rumps.App):
                 # install-from-backup: delegate to the launcher's `restore`,
                 # which now tears down + rebuilds the install directly from the
                 # backup (seeded key + imported DB/content) — no in-place
-                # overwrite and no .import-key-pending arti-state key-swap churn.
+                # overwrite and no .import-key-pending key-volume swap churn.
                 log_and_update("Rebuilding from backup (install-from-backup)…")
                 r = subprocess.run(
                     [self.launcher_script, "restore", password, zip_path],
@@ -5163,7 +5163,7 @@ License: AGPL v3"""
                 # On-the-fly vanity regeneration was removed (#256 phase 4b):
                 # the address is fixed at install (chosen on the welcome screen)
                 # and only changes via restore-from-backup. This used the churny
-                # stop -> delete arti-state -> regen path that risked clobbering
+                # stop -> delete key volume -> regen path that risked clobbering
                 # the address; it is now a no-op that reports back to the page.
                 self.log("Settings page: generate-vanity requested but disabled "
                          "(prefix is fixed at install) — ignoring")

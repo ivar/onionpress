@@ -69,11 +69,19 @@
   watchdog's stall recovery and the OnionHeaven takeover pipeline are built on
   the control port. `TOR_IMPL` is gone; a test fails if it comes back. What
   stays is the key format: the onion service key is delivered to the
-  container as an OpenSSH PEM (`ks_hs_id.ed25519_expanded_private`) in the
-  historically named `onionpress-arti-state` volume, OnionHeaven exchanges
-  keys as `arti_key_pem`, and `key-convert.py` / `key_manager.py` convert
-  between that PEM and C Tor's key files. Do not rename the volume: it is how
-  the key reaches the container on macOS and it is every install's identity.
+  container as an OpenSSH PEM at `<name>/ks_hs_id.ed25519_expanded_private`
+  in the `onionpress-onion-keys` volume (mounted at `/var/lib/onionpress-keys`),
+  OnionHeaven exchanges keys as `arti_key_pem`, and `key-convert.py` /
+  `key_manager.py` convert between that PEM and C Tor's key files. That
+  volume is every install's identity and, on macOS, the only route by which
+  the key reaches the container. It was `onionpress-arti-state` (layout
+  `state/keystore/hss/<name>/`) until 2026-09-25; both launchers carry an
+  identical `migrate_key_volume()` (test-enforced) that copies an old volume
+  to the new name once, before first-run detection, and refuses to start if
+  the copy fails — the first-run check keys off the new volume's existence,
+  so skipping the migration would mint a new address. Keep the old name in
+  the wipe lists (`.import-key-pending`, restore) so a replaced identity
+  cannot be migrated back.
 - **All Dockerfile inputs are pinned** as `ARG` defaults in the Dockerfiles
   themselves (images by multi-arch index digest, mkp224o by commit, wp-cli by
   sha256). `MKP224O_VERSION` must match `build/build-dmg-simple.sh`.

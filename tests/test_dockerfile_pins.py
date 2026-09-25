@@ -310,7 +310,7 @@ class TestTorComesFromTheOfficialImage(unittest.TestCase):
         no control interface, and sleep/wake, the watchdog's recovery and the
         OnionHeaven takeover pipeline are all built on the control port. Its
         key file format stays (OnionHeaven's wire format, delivered through
-        the arti-state volume); the daemon must not come back unnoticed.
+        the onionpress-onion-keys volume); the daemon must not come back unnoticed.
         """
         code = _strip_comments(_read(TOR_DOCKERFILE))
         self.assertNotIn(

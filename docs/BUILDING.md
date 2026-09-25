@@ -394,10 +394,12 @@ failed" churn — but it has no control interface, and sleep/wake
 DEL_ONION/ADD_ONION, the watchdog's stall recovery and the OnionHeaven
 takeover pipeline are all built on the control port. What remains is its
 key file format: the launchers deliver the onion service key as an OpenSSH
-PEM in the historically named `onionpress-arti-state` volume, OnionHeaven
-exchanges keys as `arti_key_pem`, and the entrypoint converts the PEM to
-C Tor's key files. `tests/arti-descriptor-test.sh` is the standalone repro
-to re-run if that decision is ever revisited.
+PEM in the `onionpress-onion-keys` volume (`onionpress-arti-state` until
+2026-09-25; both launchers migrate an old volume once, before first-run
+detection, and refuse to start if the copy fails), OnionHeaven exchanges
+keys as `arti_key_pem`, and the entrypoint converts the PEM to C Tor's key
+files. `tests/arti-descriptor-test.sh` is the standalone repro to re-run if
+that decision is ever revisited.
 
 Upstream rebuilds these **daily** and the tags move; a digest is the only
 thing that names one specific build. The Tor sysadmins' [registry

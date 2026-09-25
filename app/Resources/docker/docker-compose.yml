@@ -15,10 +15,11 @@ services:
       - TZ=${TZ:-UTC}
       - ONIONPRESS_VERSION=${ONIONPRESS_VERSION:-unknown}
     volumes:
-      # arti-state is the identity keystore: the launchers deliver the onion
-      # service key here as a PEM and the entrypoint converts it for C Tor.
-      # The name is historical; renaming it would orphan every install's key.
-      - arti-state:/var/lib/arti/
+      # onion-keys holds the site's identity: the launchers deliver the onion
+      # service key here as a PEM (<name>/ks_hs_id.ed25519_expanded_private)
+      # and the entrypoint converts it to C Tor's key files. Until 2026-09-25
+      # this was onionpress-arti-state; the launchers migrate it on first start.
+      - onion-keys:/var/lib/onionpress-keys/
       - tor-state:/var/lib/tor/
       - onionpress-data:/var/lib/onionpress
       - ${ONIONPRESS_SHARED_DIR:-/tmp/onionpress-no-shared}/analytics:/var/lib/onionhome/analytics
@@ -157,8 +158,8 @@ services:
       - onionpress-network
 
 volumes:
-  arti-state:
-    name: onionpress-arti-state
+  onion-keys:
+    name: onionpress-onion-keys
   tor-state:
     name: onionpress-tor-state
   wordpress-data:

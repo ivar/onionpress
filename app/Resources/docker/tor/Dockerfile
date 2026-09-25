@@ -15,8 +15,8 @@
 # recovery, the OnionHeaven takeover pipeline — is built on the control port.
 # What remains of arti is its key file format: the launchers deliver the
 # onion service key as an OpenSSH PEM (ks_hs_id.ed25519_expanded_private) in
-# the historically named arti-state volume, OnionHeaven exchanges keys in
-# that format, and /key-convert.py turns it into C Tor's key files.
+# the onionpress-onion-keys volume, OnionHeaven exchanges keys in that
+# format, and /key-convert.py turns it into C Tor's key files.
 #
 # Until Onimages 0.3.0 (2026-09-24) the official images were amd64-only,
 # which on Apple Silicon meant QEMU emulation for the whole Tor stack — the

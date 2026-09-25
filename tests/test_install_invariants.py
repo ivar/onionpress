@@ -1228,5 +1228,77 @@ class TestScrubVerifyChecks(unittest.TestCase):
         )
 
 
+
+class TestKeyVolumeMigration(unittest.TestCase):
+    """The onion service key volume was renamed on 2026-09-25 from
+    onionpress-arti-state (layout state/keystore/hss/<name>/) to
+    onionpress-onion-keys (layout <name>/). Both launchers use the volume's
+    existence as the first-run signal, so an upgraded install that skipped
+    the migration would look fresh and mint a new address. The migration
+    therefore has to exist in both launchers, be the same code, and run
+    before the first-run check.
+    """
+
+    LAUNCHERS = ["app/MacOS/onionpress", "linux/onionpress"]
+
+    @staticmethod
+    def _function_body(text, name):
+        start = text.index(f"\n{name}() {{")
+        end = text.index("\n}\n", start)
+        return text[start:end]
+
+    def test_launchers_carry_the_same_migration(self):
+        bodies = [self._function_body(_read(f), "migrate_key_volume") for f in self.LAUNCHERS]
+        self.assertEqual(
+            bodies[0], bodies[1],
+            "migrate_key_volume() must be identical in the macOS and Linux "
+            "launchers; edit both.",
+        )
+        self.assertIn("onionpress-arti-state:/old:ro", bodies[0])
+        self.assertIn("onionpress-onion-keys:/new", bodies[0])
+
+    def test_migration_runs_before_first_run_detection(self):
+        for f in self.LAUNCHERS:
+            text = _read(f)
+            with self.subTest(launcher=f):
+                # Inside start_containers: the call must come before the first
+                # look for the new volume (the function's own early-return
+                # check sits above start_containers and does not count).
+                sc = text.index("\nstart_containers() {")
+                call = text.index("if ! migrate_key_volume; then", sc)
+                check = text.index('grep -qx "onionpress-onion-keys"', sc)
+                self.assertLess(
+                    call, check,
+                    "migrate_key_volume must be called before the first-run "
+                    "check that looks for the new volume.",
+                )
+                self.assertNotIn(
+                    'grep -qx "onionpress-arti-state"', text[sc:],
+                    "First-run detection must key off the new volume name only "
+                    "(the old name may appear only in migrate_key_volume and "
+                    "the wipe lists).",
+                )
+
+    def test_wipes_remove_both_names(self):
+        """A replaced identity (key import, restore) must delete the old-name
+        volume too, or the next start would migrate it back over the new key.
+        """
+        for f in self.LAUNCHERS + ["src/onionpress/cli.py", "src/onionpress/backup.py"]:
+            text = _read(f)
+            with self.subTest(file=f):
+                self.assertIn("onionpress-onion-keys", text)
+                self.assertIn("onionpress-arti-state", text)
+
+    def test_compose_mounts_the_new_volume(self):
+        compose = "\n".join(
+            line for line in _read("app/Resources/docker/docker-compose.yml").splitlines()
+            if not line.lstrip().startswith("#"))
+        self.assertIn("onion-keys:/var/lib/onionpress-keys/", compose)
+        self.assertIn("name: onionpress-onion-keys", compose)
+        self.assertNotIn("onionpress-arti-state", compose)
+        entrypoint = _read("app/Resources/docker/tor/entrypoint.sh")
+        self.assertIn('KEYS_DIR="/var/lib/onionpress-keys"', entrypoint)
+        self.assertNotIn("/var/lib/arti", entrypoint)
+
 if __name__ == "__main__":
     unittest.main()
