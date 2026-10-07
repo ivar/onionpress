@@ -454,6 +454,58 @@ class TestMkp224oBaselineIsPinned(unittest.TestCase):
                 )
 
 
+class TestMkp224oUsesTheDefaultBackend(unittest.TestCase):
+    """Neither build selects an ed25519 backend, so both get mkp224o's default.
+
+    build-dmg-simple.sh passed `--enable-ref10` from the first vanity-address
+    commit, commented "use ref10 for ARM64 compatibility" with no measurement
+    behind it. ref10 is upstream's *previous* default — ten 32-bit limbs,
+    `crypto_int32 fe[10]` — and OPTIMISATION.txt says donna is what you want
+    on ARM. Measured on an Apple M1 Pro, one thread, v1.7.0, both at
+    `-O3 -fomit-frame-pointer`: ref10 2.39M vs donna 6.11M keys/sec.
+
+    This is the same shape of failure as the dropped -O3 above: a reinstated
+    `--enable-*` flag builds cleanly, mints correct addresses, and is 2.5x
+    slower with nothing to show for it. So it is checked rather than trusted.
+    """
+
+    def _configure_calls(self, path):
+        """mkp224o's ./configure invocations, one per line, comments gone.
+
+        `--prefix=` drops the libsodium cross-build that the same section
+        performs — libsodium is a dependency, not the miner.
+        """
+        body = _strip_comments(_read(path)).replace("\\\n", " ")
+        return [line for line in body.splitlines()
+                if "./configure" in line and "--prefix=" not in line]
+
+    def test_macos_build_selects_no_backend(self):
+        calls = self._configure_calls(DMG_BUILD)
+        self.assertTrue(
+            calls,
+            "Could not find the mkp224o configure calls in " + DMG_BUILD +
+            " — renamed? Update this test rather than passing vacuously.",
+        )
+        for line in calls:
+            with self.subTest(configure=line.strip()[:60]):
+                self.assertNotRegex(
+                    line, r"--enable-(ref10|donna|amd64-|intfilter|binsearch)",
+                    "No --enable-* backend flag: the default (ed25519-donna) "
+                    "is the fast one on both slices, and it is what the tor "
+                    "Dockerfile builds. See docs/BUILDING.md, "
+                    '"The ed25519 backend".',
+                )
+
+    def test_container_build_selects_no_backend(self):
+        """The two builds must not drift apart on this again."""
+        run = _strip_comments(_read(TOR_DOCKERFILE)).replace("\\\n", " ")
+        self.assertNotRegex(
+            run, r"--enable-(ref10|donna|amd64-)",
+            "The tor image must keep building mkp224o's default backend; "
+            "macOS and the containers mint addresses with the same code.",
+        )
+
+
 class TestWpCliIsVerified(unittest.TestCase):
     """wp-cli.phar came from the gh-pages branch of wp-cli/builds: a moving
     target, no checksum, and no `-f` — so an HTTP error page was written to

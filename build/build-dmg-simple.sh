@@ -212,25 +212,29 @@ fi
 # compares CFLAGS across AC_PROG_CC); the moment we pass CFLAGS — and we must,
 # to drive the universal cross-compile — that block is skipped whole and the
 # binary is built with NO optimisation at all. Nothing warns: configure
-# succeeds, make succeeds, mkp224o runs and mints correct addresses, 2.3x
-# slower than it should — 1.04M vs 2.37M keys/sec for this build's
-# --enable-ref10 backend, Apple M1 Pro, one thread.
+# succeeds, make succeeds, mkp224o runs and mints correct addresses, 5.9x
+# slower than it should — 1.02M vs 6.01M keys/sec, Apple M1 Pro, one thread.
 #
-# (Separately, and left alone here: --enable-ref10 is itself the slow choice
-# on ARM. Same machine, same flags, mkp224o's default donna backend does
-# 6.00M keys/sec — 2.5x ref10. Switching backends is a bigger call than
-# restoring -O3, and it cannot be validated for the x86_64 half of the
-# universal binary on an Apple Silicon host.)
+# No --enable-* flag: that selects mkp224o's current default ed25519 backend,
+# ed25519-donna, which is also what app/Resources/docker/tor/Dockerfile
+# builds. This used to pass --enable-ref10 ("for ARM64 compatibility", with no
+# measurement behind it); ref10 is upstream's *previous* default, a portable
+# 10x32-bit-limb implementation, and OPTIMISATION.txt says donna is what you
+# want on ARM. Measured, same machine and flags: ref10 2.4M vs donna 6.1M
+# keys/sec, one thread. Both slices take donna's 64-bit path (CPU_64BITS
+# covers x86_64 and aarch64), so unsigned __int128 is no cross-compile
+# hazard — see docs/BUILDING.md, "The ed25519 backend".
 #
 # -march is deliberately absent: the -arch flags already fix the ISA, and the
 # universal binary has to run on every supported Mac. That is the same reason
 # app/Resources/docker/tor/Dockerfile pins an explicit baseline instead of
 # taking configure's -march=native — see docs/BUILDING.md, "Pinned inputs".
 #
-# The cache key carries these flags so an existing cache entry built without
-# them is not silently reused.
+# The cache key names both the flags and the backend, because neither moves
+# MKP224O_VERSION: without that, a warm cache keeps serving the binary built
+# before they changed.
 MKP_OPT="-O3 -fomit-frame-pointer"
-MKP_CACHE_KEY="mkp224o-${MKP224O_VERSION}-O3-universal"
+MKP_CACHE_KEY="mkp224o-${MKP224O_VERSION}-O3-donna-universal"
 if cache_get "$MKP_CACHE_KEY" "$TEMP_BIN_DIR/mkp224o"; then
     echo "  mkp224o ${MKP224O_VERSION}: cache hit"
 elif command -v git >/dev/null 2>&1; then
@@ -287,7 +291,7 @@ elif command -v git >/dev/null 2>&1; then
     cd "$MKP_ARM64_DIR"
     CFLAGS="-arch arm64 -mmacosx-version-min=13.0 $MKP_OPT -I$SODIUM_PREFIX/include" \
         LDFLAGS="-arch arm64" \
-        ./configure --host=aarch64-apple-darwin --enable-ref10 > /dev/null 2>&1
+        ./configure --host=aarch64-apple-darwin > /dev/null 2>&1
     sed -i.bak "s| -lsodium| ${SODIUM_PREFIX}/lib/libsodium.a|g" GNUmakefile
     make -j"$(sysctl -n hw.ncpu)" > /dev/null 2>&1
     echo "  ✓ mkp224o arm64 built"
@@ -301,7 +305,7 @@ elif command -v git >/dev/null 2>&1; then
     CFLAGS="-arch x86_64 -mmacosx-version-min=13.0 $MKP_OPT -I$SODIUM_X86_DIR/include" \
         LDFLAGS="-arch x86_64" \
         CC="clang -arch x86_64" \
-        ./configure --host=x86_64-apple-darwin --enable-ref10 > /dev/null 2>&1
+        ./configure --host=x86_64-apple-darwin > /dev/null 2>&1
     sed -i.bak "s| -lsodium| ${SODIUM_X86_DIR}/lib/libsodium.a|g" GNUmakefile
     make -j"$(sysctl -n hw.ncpu)" > /dev/null 2>&1
     echo "  ✓ mkp224o x86_64 built"

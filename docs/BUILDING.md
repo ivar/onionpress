@@ -466,11 +466,12 @@ backend:
   floor could drop further for free if some ancient CPU ever needs it. The
   step that costs something is v3: at `-march=x86-64-v3` the compiler emits
   900 `mulx` and uses AVX2, about 9% fewer instructions. We give that up on
-  purpose: the longest prefix any caller accepts is 6 characters
-  (`generate_vanity_in_container`; the macOS launcher caps its own at 5), so
-  the entire search is ~1.07e9 keys at millions of keys/sec per core across
-  every core — tens of seconds. Tens of seconds are worth less than an old
-  machine silently never getting a vanity address at all.
+  purpose: the longest prefix any caller accepts is 5 characters
+  (`config.ADDRESS_PREFIX_MAX`, which both `generate_vanity_in_container` and
+  the macOS launcher defer to), so the entire search is ~3.4e7 keys at
+  millions of keys/sec per core across every core — seconds. Those seconds
+  are worth less than an old machine silently never getting a vanity address
+  at all.
 
 The amd64 figures are instruction counts, not timings: there is no x86
 hardware in this project's local toolchain, and timings under emulation would
@@ -489,8 +490,8 @@ thread (keys/sec):
 
 | backend | no `-O3` | with `-O3` |
 |---|---|---|
-| donna (Dockerfile default) | 1.02M | 6.01M |
-| ref10 (`build-dmg-simple.sh`) | 1.04M | 2.37M |
+| donna (the default, both builds) | 1.02M | 6.01M |
+| ref10 (the backend this build used to select) | 1.04M | 2.37M |
 
 `build/build-dmg-simple.sh` was in exactly that state — it has always passed
 `CFLAGS` to drive the universal cross-compile, so every shipped macOS
@@ -502,12 +503,55 @@ slow binary. The Dockerfile greps the generated `GNUmakefile` after
 macOS needs no `-march`: `-arch arm64` / `-arch x86_64` already fix the ISA,
 and the universal binary has to run on every supported Mac.
 
-That table also shows something this change deliberately does *not* touch:
-`build-dmg-simple.sh` passes `--enable-ref10`, and on ARM ref10 is 2.5x
-slower than the donna backend the container build uses. Changing which
-ed25519 implementation mints macOS addresses is a larger decision than
-restoring an optimisation flag, and it cannot be validated for the x86_64
-half of the universal binary from an Apple Silicon host.
+### The ed25519 backend
+
+That table has a second row for a reason. `build-dmg-simple.sh` used to pass
+`--enable-ref10` to both halves of the universal build; it no longer passes
+any `--enable-*` flag, which selects mkp224o's current default,
+ed25519-donna — the same backend `app/Resources/docker/tor/Dockerfile` has
+always built.
+
+`--enable-ref10` arrived in the first vanity-address commit, commented "use
+ref10 for ARM64 compatibility", with no measurement attached. It is the
+opposite of upstream's advice: `OPTIMISATION.txt` calls ref10 the "previous
+default" and donna the "current default", and says that **on ARM
+`--enable-donna` will probably work best**. The structural reason is in the
+types — ref10's field element is `crypto_int32 fe[10]`, ten 32-bit limbs,
+while donna on a 64-bit CPU is five 64-bit limbs multiplied through
+`unsigned __int128`. Measured on an Apple M1 Pro, one thread, v1.7.0, both at
+`-O3 -fomit-frame-pointer`, alternating runs:
+
+| backend | run 1 | run 2 |
+|---|---|---|
+| ref10 | 2.26M | 2.40M |
+| donna | 6.00M | 6.11M |
+
+**The x86_64 slice was not timed, and cannot be on this hardware** — there is
+no Intel Mac in this project's toolchain and no Rosetta on the build host, and
+a timing under emulation would measure the emulator. What *is* checked for
+x86_64: the cross-compile builds clean, `unsigned __int128` is no obstacle
+(donna's `CPU_64BITS` covers `CPU_X86_64` as well as `CPU_AARCH64`, so both
+slices take the 64-bit path — 913 `mul`-family instructions in the x86_64
+`worker.o`, 900 `umulh` in the arm64 one). And donna on x86_64 is not a new
+configuration: the Dockerfile has no `--enable-*` flag either, so the
+published amd64 image — the binary behind `generate_vanity_in_container` —
+has been minting Linux users' addresses with this exact backend all along.
+Upstream's note that donna is "based on amd64-51-30k", the hand-written
+x86_64 assembly backend it found fastest on x86_64, points the same way.
+
+The stakes there are small either way: prefixes cap at 5 characters, so the
+whole search is 32^5 ≈ 3.4e7 keys — seconds of work on either backend.
+
+Correctness was checked by minting keys with both backends and re-deriving
+each one with the project's own pure-Python ed25519
+(`key_manager.derive_public_key` / `derive_onion_address`): public key matches
+the secret scalar, address matches the public key, directory name matches the
+hostname.
+
+The cache key moved to `mkp224o-${MKP224O_VERSION}-O3-donna-universal` for the
+same reason it carries `-O3`: the backend changes the binary without changing
+the version, so a warm `build/.cache/bin` would otherwise keep serving the
+ref10 binary.
 
 ### The two supply-chain fixes
 
