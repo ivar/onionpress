@@ -401,6 +401,7 @@ would be one more thing to forget.
 | Tor Project C Tor image (runtime base, and the mkp224o builder) | tor | `ARG TOR_IMAGE` — Onimages `tor:trixie`, tag + index digest |
 | Docker CLI | tor | `ARG DOCKER_CLI_IMAGE` — named stage, tag + digest |
 | mkp224o | tor | `ARG MKP224O_VERSION` + `ARG MKP224O_COMMIT`, asserted after clone |
+| mkp224o ISA baseline | tor | `CFLAGS="-O3 -march=… -fomit-frame-pointer"` per `TARGETARCH`, asserted after configure |
 | Tor apt signing key | tor | verified inside the Tor Project's own image build (fingerprint `A3C4…DD89`); this repo pins the resulting image by digest instead |
 | WordPress base | wordpress | `ARG WORDPRESS_IMAGE` — tag + index digest |
 | wp-cli | wordpress | `ARG WP_CLI_VERSION` + `ARG WP_CLI_SHA256`, verified |
@@ -409,7 +410,8 @@ would be one more thing to forget.
 `tests/test_dockerfile_pins.py` fails if any base image loses its digest, if
 the runtime base stops being the Tor Project's image, if an arti image, binary
 or user creeps back in, if `USER root` or `CMD []` go missing from the runtime
-stage, if `MKP224O_COMMIT` stops being a full SHA, if the wp-cli checksum is
+stage, if `MKP224O_COMMIT` stops being a full SHA, if the mkp224o CFLAGS stop
+naming a fixed `-march` or stop carrying `-O3`, if the wp-cli checksum is
 removed, or if a `curl` loses `-f`.
 
 ### The Tor Project's images
@@ -461,6 +463,133 @@ Silicon meant QEMU emulation for the whole Tor stack; that is why this image
 used to build everything itself. 0.3.0 added arm64.
 Upstream labels the images experimental; the trixie variants use only Tor
 Project package sources.
+
+### The pinned input that isn't a version: mkp224o's `-march`
+
+Pinning the mkp224o commit pinned the *source*. The **binary** still varied,
+because mkp224o's `configure.ac` appends `-march=native` whenever the compiler
+accepts it — so the published image encoded whichever CPU the builder happened
+to have. That is worse than a reproducibility wart. Both halves are built on
+GitHub-hosted runners, whose CPU model changes under us without notice, and
+`native` on the amd64 one is at least Haswell — so a binary using instructions
+the user's CPU lacks dies with SIGILL. mkp224o is what mints the vanity
+address, and nothing above it treats a failure as fatal:
+`generate_vanity_in_container` in `src/onionpress/launcher_ops.py` logs the
+exit status and returns `None`, and the site carries on with a random address.
+So the crash costs the user their `op2…` identity and reports nothing. (The
+macOS launcher runs the bundled binary rather than this one, and
+`generate_vanity_address` there says the same thing in a comment.)
+
+Each arch now gets a fixed baseline, chosen from `TARGETARCH`:
+
+| `TARGETARCH` | `-march` | Floor |
+|---|---|---|
+| `amd64` | `x86-64-v2` | Nehalem (2008) and later |
+| `arm64` | `armv8-a` | every arm64 machine |
+| anything else | — | build fails, deliberately |
+
+An unrecognised `TARGETARCH` fails the build rather than falling back,
+because both fallbacks are silent: guessing an ISA SIGILLs at run time, and
+omitting `-march` lets `configure` put `native` back.
+
+**What the baseline costs**, measured against mkp224o v1.7.0's default donna
+backend:
+
+- **arm64: nothing at all.** `-march=native` and `-march=armv8-a` compile to
+  *byte-identical* binaries. donna's hot loop is 64x64→128 scalar multiplies,
+  which are base-ISA `mul`/`umulh`; there is no wider instruction available to
+  give up.
+- **amd64: real, and accepted.** `x86-64-v2` and plain `x86-64` are
+  equivalent for this code (10727 vs 10729 instructions in `worker.o`), so the
+  floor could drop further for free if some ancient CPU ever needs it. The
+  step that costs something is v3: at `-march=x86-64-v3` the compiler emits
+  900 `mulx` and uses AVX2, about 9% fewer instructions. We give that up on
+  purpose: the longest prefix any caller accepts is 5 characters
+  (`config.ADDRESS_PREFIX_MAX`, which both `generate_vanity_in_container` and
+  the macOS launcher defer to), so the entire search is ~3.4e7 keys at
+  millions of keys/sec per core across every core — seconds. Those seconds
+  are worth less than an old machine silently never getting a vanity address
+  at all.
+
+The amd64 figures are instruction counts, not timings: there is no x86
+hardware in this project's local toolchain, and timings under emulation would
+measure the emulator. The arm64 figures are wall-clock throughput on an Apple
+M1 Pro.
+
+### `-O3` is load-bearing, and its absence is silent
+
+`configure.ac` applies its own `-O3 -march=native -fomit-frame-pointer` **only
+when `CFLAGS` arrived unset** — it compares `CFLAGS` before and after
+`AC_PROG_CC`. Pass any `CFLAGS` and that whole block is skipped, so a build
+that sets `-march` by hand and stops there gets **no optimisation at all**.
+Nothing warns about it: configure succeeds, `make` succeeds, and mkp224o runs
+and mints correct addresses, several times slower. On an Apple M1 Pro, one
+thread (keys/sec):
+
+| backend | no `-O3` | with `-O3` |
+|---|---|---|
+| donna (the default, both builds) | 1.02M | 6.01M |
+| ref10 (the backend this build used to select) | 1.04M | 2.37M |
+
+`build/build-dmg-simple.sh` was in exactly that state — it has always passed
+`CFLAGS` to drive the universal cross-compile, so every shipped macOS
+`mkp224o` was unoptimised. It now passes `-O3 -fomit-frame-pointer` too, and
+its binary cache key carries the flags so a warm cache cannot serve the old
+slow binary. The Dockerfile greps the generated `GNUmakefile` after
+`./configure` for the same reason: this failure leaves no other trace.
+
+macOS needs no `-march`: `-arch arm64` / `-arch x86_64` already fix the ISA,
+and the universal binary has to run on every supported Mac.
+
+### The ed25519 backend
+
+That table has a second row for a reason. `build-dmg-simple.sh` used to pass
+`--enable-ref10` to both halves of the universal build; it no longer passes
+any `--enable-*` flag, which selects mkp224o's current default,
+ed25519-donna — the same backend `app/Resources/docker/tor/Dockerfile` has
+always built.
+
+`--enable-ref10` arrived in the first vanity-address commit, commented "use
+ref10 for ARM64 compatibility", with no measurement attached. It is the
+opposite of upstream's advice: `OPTIMISATION.txt` calls ref10 the "previous
+default" and donna the "current default", and says that **on ARM
+`--enable-donna` will probably work best**. The structural reason is in the
+types — ref10's field element is `crypto_int32 fe[10]`, ten 32-bit limbs,
+while donna on a 64-bit CPU is five 64-bit limbs multiplied through
+`unsigned __int128`. Measured on an Apple M1 Pro, one thread, v1.7.0, both at
+`-O3 -fomit-frame-pointer`, alternating runs:
+
+| backend | run 1 | run 2 |
+|---|---|---|
+| ref10 | 2.26M | 2.40M |
+| donna | 6.00M | 6.11M |
+
+**The x86_64 slice was not timed, and cannot be on this hardware** — there is
+no Intel Mac in this project's toolchain and no Rosetta on the build host, and
+a timing under emulation would measure the emulator. What *is* checked for
+x86_64: the cross-compile builds clean, `unsigned __int128` is no obstacle
+(donna's `CPU_64BITS` covers `CPU_X86_64` as well as `CPU_AARCH64`, so both
+slices take the 64-bit path — 913 `mul`-family instructions in the x86_64
+`worker.o`, 900 `umulh` in the arm64 one). And donna on x86_64 is not a new
+configuration: the Dockerfile has no `--enable-*` flag either, so the
+published amd64 image — the binary behind `generate_vanity_in_container` —
+has been minting Linux users' addresses with this exact backend all along.
+Upstream's note that donna is "based on amd64-51-30k", the hand-written
+x86_64 assembly backend it found fastest on x86_64, points the same way.
+
+The stakes there are small either way: prefixes cap at 5 characters, so the
+whole search is 32^5 ≈ 3.4e7 keys — seconds of work on either backend.
+
+Correctness was checked by minting keys with both backends and re-deriving
+each one with the project's own pure-Python ed25519
+(`key_manager.derive_public_key` / `derive_onion_address`): public key matches
+the secret scalar, address matches the public key, directory name matches the
+hostname.
+
+The cache key moved to `mkp224o-${MKP224O_VERSION}-O3-donna-universal` for the
+same reason it carries `-O3`: the backend changes the binary without changing
+the version, so a warm `build/.cache/bin` would otherwise keep serving the
+ref10 binary.
 
 ### The two supply-chain fixes
 
@@ -515,12 +644,17 @@ build/base-image-digest.sh wordpress:latest
 (`docker buildx imagetools inspect <tag>` reports the same digest when you
 have buildx.) Then edit the `ARG` default and rebuild. The build prints
 `tor --version` so the reviewer of a `TOR_IMAGE` bump sees what it brought.
-One coupling rule:
+Two coupling rules:
 
 - **`MKP224O_VERSION` must match `build/build-dmg-simple.sh`.** That script
   cross-compiles the same mkp224o release as a universal macOS binary. Two
   different versions minting vanity addresses for the same project is a
   difference nobody notices until the outputs differ. A test enforces this.
+- **Bumping `MKP224O_COMMIT` means re-reading `configure.ac`.** The `-march`
+  and `-O3` handling described above is upstream behaviour this build works
+  around, not an interface. The Dockerfile asserts the flags it wanted
+  actually landed in the generated `GNUmakefile`, so a change upstream fails
+  the build loudly instead of quietly shipping an unoptimised miner.
 
 ---
 
