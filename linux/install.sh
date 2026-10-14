@@ -276,6 +276,19 @@ if [ ! -d "$REPO_DIR/app/Resources/docker" ]; then
     exit 1
 fi
 
+# A folder copied with `cp -r src dst` lands INSIDE dst when dst already
+# exists, so a second run of this script (the README's curl | bash line,
+# run again to update) used to produce docker/docker, plugins/plugins,
+# lib/onionpress/onionpress and so on, while the launcher kept using the
+# first install's copies and drifted away from the launcher that was
+# replaced (issue #316). Replace each tree instead, which also drops files
+# the new version no longer ships. The services were stopped above.
+replace_tree() {
+    local src="$1" dst="$2"
+    $SUDO rm -rf "$dst"
+    $SUDO cp -r "$src" "$dst"
+}
+
 # Copy files
 $SUDO cp "$REPO_DIR/linux/onionpress" "$INSTALL_DIR/onionpress"
 $SUDO chmod +x "$INSTALL_DIR/onionpress"
@@ -292,26 +305,26 @@ $SUDO mkdir -p /usr/local/bin
 $SUDO ln -sf "$INSTALL_DIR/onionpress" /usr/local/bin/onionpress
 $SUDO ln -sf "$INSTALL_DIR/onionpress-tray" /usr/local/bin/onionpress-tray
 
-$SUDO cp -r "$REPO_DIR/app/Resources/docker" "$INSTALL_DIR/docker"
-$SUDO cp -r "$REPO_DIR/app/Resources/plugins" "$INSTALL_DIR/plugins"
+replace_tree "$REPO_DIR/app/Resources/docker" "$INSTALL_DIR/docker"
+replace_tree "$REPO_DIR/app/Resources/plugins" "$INSTALL_DIR/plugins"
 
 # OnionPress theme (header w/ @onionname, Follow/Directory templates).
 # The launcher's install_onionpress_theme() silently skips if the
 # directory is missing, leaving WP on a default theme.
 if [ -d "$REPO_DIR/app/Resources/themes" ]; then
-    $SUDO cp -r "$REPO_DIR/app/Resources/themes" "$INSTALL_DIR/themes"
+    replace_tree "$REPO_DIR/app/Resources/themes" "$INSTALL_DIR/themes"
 fi
 
 # Shared Python package — required by `op_py` in the launcher (PYTHONPATH=$INSTALL_DIR/lib)
 # and by onionpress-tray which inserts $INSTALL_DIR/lib into sys.path.
 $SUDO mkdir -p "$INSTALL_DIR/lib"
-$SUDO cp -r "$REPO_DIR/src/onionpress" "$INSTALL_DIR/lib/onionpress"
+replace_tree "$REPO_DIR/src/onionpress" "$INSTALL_DIR/lib/onionpress"
 
 # Tray icons (tray-running/-starting/-stopped.png). The tray's ICON_THEME_PATH
 # points at $INSTALL_DIR/assets; without these the indicator falls back to the
 # distro's missing-icon glyph.
 if [ -d "$REPO_DIR/linux/assets" ]; then
-    $SUDO cp -r "$REPO_DIR/linux/assets" "$INSTALL_DIR/assets"
+    replace_tree "$REPO_DIR/linux/assets" "$INSTALL_DIR/assets"
 fi
 
 # Bring up the tray immediately — with the binary, shared lib, and icons in

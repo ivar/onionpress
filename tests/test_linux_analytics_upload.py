@@ -94,7 +94,9 @@ class TestDaemonImportPath(unittest.TestCase):
         for rel in ("linux/install.sh", "build/build-linux.sh"):
             src = _read(rel)
             self.assertRegex(
-                src, r'cp -r "\$[A-Za-z_]+/src/onionpress(/\.)?" "\$[A-Za-z_]+/lib/onionpress',
+                # install.sh copies through replace_tree (rm -rf, then cp -r)
+                # since issue #316; build-linux.sh copies into a fresh staging dir.
+                src, r'(cp -r|replace_tree) "\$[A-Za-z_]+/src/onionpress(/\.)?" "\$[A-Za-z_]+/lib/onionpress',
                 f"{rel} must copy src/onionpress to <install>/lib/onionpress — "
                 "the heartbeat daemon imports onionpress.analytics_sharing from there.",
             )
