@@ -34,7 +34,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from onionpress import (  # noqa: E402
-    backup, cli, config, confirm, handle_action, launcher_ops, multisite,
+    backup, cli, config, confirm, daemon, handle_action, launcher_ops, multisite,
     onionheaven, redact, scrub, wordpress_egress,
 )
 from onionpress.platform import OS  # noqa: E402
@@ -191,6 +191,15 @@ ROWS = [
                   confirmed=frozenset({"uninstall"})),
         os_name="macos", check=positional_launcher),
 
+    # ---- the Mac daemon (issue #367): no OnionPressCLI setup ----
+    Row("daemon", ["daemon"], "daemon.run_daemon_command",
+        mock.call("serve", ANY, ANY, launcher_script="/stub/launcher", json_output=False,
+                  version=cli.__version__, no_offline=False), rc=0, returns=0),
+    Row("daemon", ["daemon", "stop", "--json", "--no-offline", "--launcher", "/my/launcher"],
+        "daemon.run_daemon_command",
+        mock.call("stop", ANY, ANY, launcher_script="/my/launcher", json_output=True,
+                  version=cli.__version__, no_offline=True), rc=1, returns=1),
+
     # ---- the Settings page's requests (issue #366) ----
     Row("handle-action", ["handle-action", "--json", "--confirmed", "address-change"],
         "handle_action.handle",
@@ -337,6 +346,7 @@ MODULES = {
     "cli": cli, "config": config, "handle_action": handle_action, "onionheaven": onionheaven,
     "multisite": multisite, "scrub": scrub, "redact": redact, "backup": backup,
     "wordpress_egress": wordpress_egress, "launcher_ops": launcher_ops,
+    "daemon": daemon,
 }
 
 
